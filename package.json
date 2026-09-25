@@ -14,7 +14,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^11.9.1",
+    "better-sqlite3": "^13.0.3",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
