@@ -64,11 +64,22 @@ CREATE TABLE IF NOT EXISTS threads (
     avatar_url      TEXT DEFAULT '',
     phone           TEXT DEFAULT '',
     is_contact      INTEGER DEFAULT 0,
+    tags            TEXT DEFAULT '',
+    notes           TEXT DEFAULT '',
     last_message    TEXT DEFAULT '',
     last_message_at INTEGER DEFAULT NULL,
     last_direction  TEXT DEFAULT NULL,
     unread_count    INTEGER DEFAULT 0,
     updated_at      INTEGER DEFAULT (strftime('%s','now') * 1000)
+);
+
+-- Bảng lưu các mẫu câu trả lời nhanh (Quick Replies / Canned Responses)
+CREATE TABLE IF NOT EXISTS quick_replies (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    shortcut   TEXT NOT NULL UNIQUE,
+    title      TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -89,6 +100,20 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages (thread_id, id);
 CREATE INDEX IF NOT EXISTS idx_messages_msgid ON messages (msg_id);
 CREATE INDEX IF NOT EXISTS idx_threads_last ON threads (last_message_at DESC);
 `);
+
+// Tự động nâng cấp schema cho bảng threads nếu nâng cấp từ phiên bản cũ (idempotent migration)
+const threadCols = new Set(db.prepare("PRAGMA table_info('threads')").all().map(c => c.name));
+if (!threadCols.has('tags')) db.exec("ALTER TABLE threads ADD COLUMN tags TEXT DEFAULT ''");
+if (!threadCols.has('notes')) db.exec("ALTER TABLE threads ADD COLUMN notes TEXT DEFAULT ''");
+
+// Khởi tạo dữ liệu mẫu cho bảng quick_replies nếu bảng đang trống
+if (db.prepare('SELECT COUNT(*) AS c FROM quick_replies').get().c === 0) {
+    const seedQuickReply = db.prepare('INSERT INTO quick_replies (shortcut, title, content) VALUES (?, ?, ?)');
+    seedQuickReply.run('chao', 'Lời chào mở đầu', 'Xin chào anh/chị! Em có thể hỗ trợ thông tin gì cho mình hôm nay ạ?');
+    seedQuickReply.run('baogia', 'Yêu cầu báo giá', 'Dạ anh/chị vui lòng cho em biết nhu cầu hoặc mã sản phẩm quan tâm để em gửi bảng báo giá chi tiết nhé!');
+    seedQuickReply.run('sdt', 'Xin số điện thoại', 'Dạ anh/chị cho em xin số điện thoại để bộ phận chuyên viên liên hệ hỗ trợ trực tiếp cho mình ngay ạ.');
+    seedQuickReply.run('camon', 'Cảm ơn khách hàng', 'Cảm ơn anh/chị đã tin tưởng và liên hệ! Chúc anh/chị một ngày làm việc thật hiệu quả.');
+}
 
 // ==========================================
 // Users
@@ -195,18 +220,35 @@ const threads = {
     resetUnread: (threadId) =>
         db.prepare('UPDATE threads SET unread_count = 0 WHERE thread_id = ?').run(threadId),
 
+    // Cập nhật thông tin CRM (thẻ phân loại tags + ghi chú notes) cho hội thoại
+    updateCrm: (threadId, { tags, notes }) => {
+        const current = db.prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+        if (!current) return null;
+        const nextTags = tags !== undefined ? String(tags).trim() : (current.tags || '');
+        const nextNotes = notes !== undefined ? String(notes).trim() : (current.notes || '');
+        db.prepare('UPDATE threads SET tags = ?, notes = ?, updated_at = ? WHERE thread_id = ?')
+            .run(nextTags, nextNotes, Date.now(), threadId);
+        return db.prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+    },
+
     // Danh sách hội thoại: có tin nhắn xếp trước (mới nhất trên cùng), danh bạ chưa chat xếp sau theo tên
-    list: ({ search = '', type = '' } = {}) => {
+    list: ({ search = '', type = '', tag = '' } = {}) => {
         let sql = 'SELECT * FROM threads WHERE 1=1';
         const params = [];
         if (search) {
-            sql += ' AND (name LIKE ? OR thread_id LIKE ? OR phone LIKE ?)';
+            sql += ' AND (name LIKE ? OR thread_id LIKE ? OR phone LIKE ? OR tags LIKE ? OR notes LIKE ?)';
             const like = `%${search}%`;
-            params.push(like, like, like);
+            params.push(like, like, like, like, like);
         }
         if (type === 'user' || type === 'group') {
             sql += ' AND type = ?';
             params.push(type);
+        } else if (type === 'unread') {
+            sql += ' AND unread_count > 0';
+        }
+        if (tag) {
+            sql += ' AND tags LIKE ?';
+            params.push(`%${tag}%`);
         }
         sql += ' ORDER BY (last_message_at IS NULL), last_message_at DESC, name COLLATE NOCASE ASC LIMIT 500';
         return db.prepare(sql).all(...params);
@@ -215,9 +257,59 @@ const threads = {
     // Search theo tên cho API — trả kèm type để biết cá nhân hay nhóm
     searchByName: (name, limit = 50) =>
         db.prepare(`
-            SELECT thread_id, type, name, avatar_url, phone, is_contact
+            SELECT thread_id, type, name, avatar_url, phone, is_contact, tags
             FROM threads WHERE name LIKE ? ORDER BY name COLLATE NOCASE LIMIT ?
         `).all(`%${name}%`, limit),
+};
+
+// ==========================================
+// Quick Replies (Mẫu tin nhắn trả lời nhanh)
+// ==========================================
+const quickReplies = {
+    list: () => db.prepare('SELECT * FROM quick_replies ORDER BY shortcut ASC').all(),
+    create: ({ shortcut, title, content }) =>
+        db.prepare(`
+            INSERT INTO quick_replies (shortcut, title, content, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(shortcut) DO UPDATE SET
+                title = excluded.title,
+                content = excluded.content
+        `).run(String(shortcut).trim().toLowerCase(), String(title).trim(), String(content).trim(), Date.now()),
+    remove: (id) => db.prepare('DELETE FROM quick_replies WHERE id = ?').run(id),
+};
+
+// ==========================================
+// Thống kê tổng quan Workspace (Analytics)
+// ==========================================
+const stats = {
+    overview: () => {
+        const t = db.prepare(`
+            SELECT
+                COUNT(*) AS total_threads,
+                SUM(CASE WHEN type = 'user' THEN 1 ELSE 0 END) AS user_threads,
+                SUM(CASE WHEN type = 'group' THEN 1 ELSE 0 END) AS group_threads,
+                SUM(CASE WHEN unread_count > 0 THEN 1 ELSE 0 END) AS unread_threads
+            FROM threads
+        `).get();
+        const m = db.prepare(`
+            SELECT
+                COUNT(*) AS total_messages,
+                SUM(CASE WHEN direction = 'in' THEN 1 ELSE 0 END) AS messages_in,
+                SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS messages_out,
+                SUM(CASE WHEN source = 'ai' THEN 1 ELSE 0 END) AS ai_messages
+            FROM messages
+        `).get();
+        return {
+            total_threads: t?.total_threads || 0,
+            user_threads: t?.user_threads || 0,
+            group_threads: t?.group_threads || 0,
+            unread_threads: t?.unread_threads || 0,
+            total_messages: m?.total_messages || 0,
+            messages_in: m?.messages_in || 0,
+            messages_out: m?.messages_out || 0,
+            ai_messages: m?.ai_messages || 0,
+        };
+    },
 };
 
 // ==========================================
@@ -257,4 +349,4 @@ const mcpSync = {
 };
 // Trợ lý AI — bảng ai_* + cột messages.meta (xem services/ai/store.js). Phải chạy TRƯỚC messages.insert đầu tiên.
 const ai = require('./services/ai/store').createAiStore(db);
-module.exports = { db, users, tokens, apiKeys, zaloSession, threads, messages, mcpSync, ai };
+module.exports = { db, users, tokens, apiKeys, zaloSession, threads, quickReplies, stats, messages, mcpSync, ai };
