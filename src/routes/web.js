@@ -124,10 +124,18 @@ router.post('/zalo/sync', async (req, res) => {
 router.use('/ai', require('./ai'));
 
 router.get('/threads', (req, res) => {
-    const { search = '', type = '' } = req.query;
+    const { search = '', type = '', tag = '' } = req.query;
     ok(res, {
-        threads: store.threads.list({ search: String(search), type: String(type) }),
+        threads: store.threads.list({ search: String(search), type: String(type), tag: String(tag) }),
         ai: aiEngine.threadStatesSummary(), // trạng thái AI theo thread để hiện icon 🤖/🙋
+    });
+});
+
+// Thống kê tổng quan Workspace (số hội thoại, tin nhắn, AI)
+router.get('/stats', (req, res) => {
+    ok(res, {
+        ...store.stats.overview(),
+        zalo: zaloChannel.status(),
     });
 });
 
@@ -145,6 +153,37 @@ router.get('/messages/:thread_id', (req, res) => {
 router.post('/threads/:thread_id/read', (req, res) => {
     store.threads.resetUnread(req.params.thread_id);
     ok(res, {});
+});
+
+// Cập nhật thông tin CRM (thẻ phân loại tags + ghi chú notes) cho hội thoại
+router.patch('/threads/:thread_id/crm', (req, res) => {
+    const threadId = String(req.params.thread_id);
+    const { tags, notes } = req.body || {};
+    const updated = store.threads.updateCrm(threadId, { tags, notes });
+    if (!updated) return fail(res, 'NOT_FOUND', 'Không tìm thấy hội thoại', 404);
+    sse.broadcast('threads_updated', {});
+    ok(res, { thread: updated });
+});
+
+// ==========================================
+// Quick Replies — Mẫu tin nhắn trả lời nhanh
+// ==========================================
+router.get('/quick-replies', (req, res) => {
+    ok(res, { quick_replies: store.quickReplies.list() });
+});
+
+router.post('/quick-replies', (req, res) => {
+    const { shortcut, title, content } = req.body || {};
+    if (!shortcut || !title || !content) {
+        return fail(res, 'MISSING_PARAMS', 'Thiếu phím tắt (shortcut), tiêu đề hoặc nội dung');
+    }
+    store.quickReplies.create({ shortcut, title, content });
+    ok(res, { quick_replies: store.quickReplies.list() });
+});
+
+router.delete('/quick-replies/:id', (req, res) => {
+    store.quickReplies.remove(parseInt(req.params.id, 10));
+    ok(res, { quick_replies: store.quickReplies.list() });
 });
 
 // Gửi tin từ UI: { thread_id, message?, image_base64? }
