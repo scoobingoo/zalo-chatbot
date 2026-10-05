@@ -3,27 +3,81 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Đăng nhập — Zalo Inbox</title>
+<title>Đăng nhập — ZaloFlow Studio</title>
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body class="login-page">
-<div class="login-box">
-    <div class="login-logo">💬</div>
-    <h1 id="appName">Zalo Inbox</h1>
-    <p class="login-sub">Đăng nhập để trực tin nhắn</p>
-    <form id="loginForm">
-        <input type="text" id="username" placeholder="Tên đăng nhập" autocomplete="username" required>
-        <input type="password" id="password" placeholder="Mật khẩu" autocomplete="current-password" required>
-        <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Đăng nhập</button>
-        <div class="login-error" id="loginError"></div>
-    </form>
+<!-- Khung đăng nhập 2 cột phong cách SaaS hiện đại -->
+<div class="login-shell">
+    <!-- Cột trái: Giới thiệu nền tảng Omnichannel & AI -->
+    <div class="login-showcase">
+        <div>
+            <div class="login-badge">✨ ZALOFLOW STUDIO v2.0</div>
+            <h2>Nền tảng Trực Chat, CRM &amp; AI Agent đa mô hình cho Zalo</h2>
+            <p>Quản lý hội thoại thời gian thực qua SSE, tự động hóa chăm sóc khách hàng bằng AI Agent và tích hợp trực tiếp với Claude / ChatGPT thông qua giao thức MCP OAuth 2.1.</p>
+            <div class="login-features">
+                <div class="login-feature-item">
+                    <div class="login-feature-icon">🤖</div>
+                    <div>
+                        <strong>Multi-Provider AI Agent &amp; Vision</strong>
+                        <span>Hỗ trợ Gemini, OpenAI, OpenRouter &amp; ChatGPT Plus với khả năng đọc ảnh và gọi công cụ.</span>
+                    </div>
+                </div>
+                <div class="login-feature-item">
+                    <div class="login-feature-icon">📇</div>
+                    <div>
+                        <strong>Omnichannel Inbox &amp; Customer CRM</strong>
+                        <span>Phân loại khách hàng theo nhãn (VIP, Lead), lưu ghi chú và phản hồi nhanh bằng phím tắt.</span>
+                    </div>
+                </div>
+                <div class="login-feature-item">
+                    <div class="login-feature-icon">🔌</div>
+                    <div>
+                        <strong>REST API &amp; Model Context Protocol (MCP)</strong>
+                        <span>Tích hợp liền mạch với hệ thống CRM/ERP bên ngoài và các trợ lý AI thế hệ mới.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div style="font-size:12px; color:#64748b; margin-top:24px">
+            Built with Node.js, Express, SQLite WAL &amp; Server-Sent Events
+        </div>
+    </div>
+
+    <!-- Cột phải: Form đăng nhập quản trị -->
+    <div class="login-box">
+        <div class="login-logo">💬</div>
+        <h1 id="appName">ZaloFlow Studio</h1>
+        <p class="login-sub">Đăng nhập vào không gian làm việc của bạn</p>
+        <form id="loginForm">
+            <div class="login-field">
+                <label for="username">Tên đăng nhập</label>
+                <input type="text" id="username" placeholder="Nhập username (vd: admin)" autocomplete="username" required>
+            </div>
+            <div class="login-field">
+                <label for="password">Mật khẩu</label>
+                <input type="password" id="password" placeholder="Nhập mật khẩu" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Đăng nhập hệ thống →</button>
+            <div class="login-error" id="loginError"></div>
+        </form>
+    </div>
 </div>
+
 <script>
+// Khôi phục giao diện Sáng/Tối từ bộ nhớ trình duyệt
+if (localStorage.getItem('zf_theme') === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+}
+
+// Xử lý sự kiện gửi biểu mẫu đăng nhập
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = document.getElementById('loginBtn');
     const errEl = document.getElementById('loginError');
-    btn.disabled = true; btn.textContent = 'Đang đăng nhập...'; errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Đang xác thực...';
+    errEl.textContent = '';
     try {
         const res = await fetch('/app/login', {
             method: 'POST',
@@ -40,9 +94,10 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
             errEl.textContent = json.error?.message || 'Đăng nhập thất bại';
         }
     } catch (err) {
-        errEl.textContent = 'Lỗi kết nối server';
+        errEl.textContent = 'Không thể kết nối đến máy chủ';
     }
-    btn.disabled = false; btn.textContent = 'Đăng nhập';
+    btn.disabled = false;
+    btn.textContent = 'Đăng nhập hệ thống →';
 });
 </script>
 </body>
