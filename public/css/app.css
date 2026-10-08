@@ -1592,6 +1592,8 @@ input, textarea, select {
         right: 0;
         top: 55px;
         bottom: 0;
+        width: 300px;
+        max-width: 88vw;
         z-index: 40;
         box-shadow: var(--shadow-lg);
     }
@@ -1619,4 +1621,9 @@ input, textarea, select {
     .ai-chip .lbl {
         display: none;
     }
+    .topbar {
+        padding: 8px 12px;
+        gap: 6px;
+    }
 }
+
