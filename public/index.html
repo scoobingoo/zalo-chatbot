@@ -3,53 +3,75 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Zalo Inbox</title>
+<title>ZaloFlow Studio — Inbox &amp; CRM</title>
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
 <div class="app" id="app">
-    <!-- Topbar -->
+    <!-- Thanh điều hướng trên cùng (Topbar) -->
     <div class="topbar">
-        <div class="brand">💬 <span id="brandName">Zalo Inbox</span></div>
+        <div class="brand">
+            <span>💬</span>
+            <span id="brandName">ZaloFlow Studio</span>
+            <span class="brand-badge">CRM + AI</span>
+        </div>
         <div class="channel-chip" id="channelChip" style="display:none">
             <img id="channelAvatar" src="" alt="">
             <span class="status-dot" id="statusDot"></span>
             <span id="channelName"></span>
         </div>
         <div class="spacer"></div>
-        <button class="navlink" id="btnSync" title="Import lại bạn bè + nhóm">📇 Đồng bộ danh bạ</button>
-        <a href="/ai.html" id="navAi">🤖 Trợ lý AI</a>
-        <a href="/settings.html">⚙️ Cài đặt & API</a>
+        <!-- Thống kê nhanh trên thanh điều hướng -->
+        <div class="topbar-stats" id="topbarStats">
+            <span class="kpi-pill" title="Tổng số hội thoại">💬 Hội thoại: <b id="statThreads">0</b></span>
+            <span class="kpi-pill" title="Tổng số tin nhắn đã lưu">📨 Tin nhắn: <b id="statMessages">0</b></span>
+            <span class="kpi-pill" title="Số tin do AI tự động phản hồi">🤖 AI đã trả lời: <b id="statAiReplies">0</b></span>
+        </div>
+        <button class="navlink" id="btnSync" title="Import lại bạn bè + nhóm">📇 Đồng bộ</button>
+        <a href="/ai.html" id="navAi">🤖 AI Studio</a>
+        <a href="/settings.html">⚙️ Cài đặt &amp; API</a>
+        <button class="theme-btn" id="btnTheme" title="Chuyển đổi giao diện Sáng / Tối">🌙</button>
         <button class="navlink" id="btnLogout">Đăng xuất</button>
     </div>
 
-    <!-- Banner khi kênh chưa kết nối -->
+    <!-- Banner cảnh báo khi kênh Zalo chưa kết nối -->
     <div class="banner-disconnected" id="bannerDisconnected" style="display:none">
-        <span>⚠️ Kênh Zalo chưa kết nối — tin nhắn không được nhận.</span>
-        <button class="btn btn-primary btn-sm" id="btnConnect">Quét QR kết nối</button>
+        <span>⚠️ Kênh Zalo chưa kết nối — tin nhắn thời gian thực chưa được kích hoạt.</span>
+        <button class="btn btn-primary btn-sm" id="btnConnect">Quét mã QR kết nối</button>
     </div>
 
+    <!-- Không gian làm việc 3 cột: Sidebar | Khung Chat | Bảng CRM -->
     <div class="main">
-        <!-- Sidebar: danh sách hội thoại -->
+        <!-- Cột 1: Danh sách hội thoại -->
         <div class="sidebar">
             <div class="sidebar-search">
-                <input type="text" id="searchInput" placeholder="🔍 Tìm theo tên, ID, SĐT...">
+                <input type="text" id="searchInput" placeholder="🔍 Tìm theo tên, ID, SĐT, nhãn hoặc ghi chú...">
             </div>
             <div class="filter-tabs">
                 <button class="active" data-type="">Tất cả</button>
                 <button data-type="user">👤 Cá nhân</button>
                 <button data-type="group">👥 Nhóm</button>
+                <button data-type="unread">🔴 Chưa đọc</button>
+            </div>
+            <!-- Thanh lọc theo thẻ phân loại CRM -->
+            <div class="tag-filter-bar" id="tagFilterBar">
+                <button class="tag-chip-filter active" data-tag="">Mọi nhãn</button>
+                <button class="tag-chip-filter" data-tag="VIP">⭐ VIP</button>
+                <button class="tag-chip-filter" data-tag="Lead">🔥 Lead</button>
+                <button class="tag-chip-filter" data-tag="Support">🛠️ Support</button>
+                <button class="tag-chip-filter" data-tag="Follow-up">⏰ Follow-up</button>
             </div>
             <div class="thread-list" id="threadList">
-                <div class="empty-note">Đang tải...</div>
+                <div class="empty-note">Đang tải danh sách hội thoại...</div>
             </div>
         </div>
 
-        <!-- Chat pane -->
+        <!-- Cột 2: Khung Chat chính -->
         <div class="chat" id="chatPane">
             <div class="chat-placeholder" id="chatPlaceholder">
                 <div class="big">💬</div>
-                <div>Chọn một hội thoại để bắt đầu</div>
+                <div style="font-weight:700; font-size:16px; color:var(--text)">Chọn một hội thoại để bắt đầu</div>
+                <div style="max-width:360px">Tin nhắn mới sẽ tự động cập nhật theo thời gian thực qua Server-Sent Events (SSE).</div>
             </div>
 
             <div id="chatContent" style="display:none; flex:1; flex-direction:column; min-height:0;">
@@ -65,6 +87,7 @@
                         </div>
                     </div>
                     <button class="ai-chip" id="aiChip" style="display:none" title="Trạng thái Trợ lý AI cho hội thoại này">🤖 <span class="lbl" id="aiChipLabel">AI</span> ▾</button>
+                    <button class="btn btn-light btn-sm" id="btnToggleCrm" title="Ẩn/hiện bảng thông tin khách hàng CRM">📋 Hồ sơ CRM</button>
                     <div class="ai-menu" id="aiMenu" style="display:none">
                         <div class="hint" id="aiMenuInfo" style="padding:4px 10px 8px"></div>
                         <button data-act="on">▶️ Bật AI cho hội thoại này</button>
@@ -74,33 +97,83 @@
                         <button data-act="resume">⏯️ Tiếp tục ngay (bỏ tạm dừng / cần người)</button>
                         <button data-act="reset">🔄 Làm mới hội thoại AI (/new)</button>
                         <div class="sep"></div>
-                        <a href="/ai.html" style="display:block; padding:8px 10px; font-size:13px; text-decoration:none; color:var(--primary)">⚙️ Mở cài đặt Trợ lý AI</a>
+                        <a href="/ai.html" style="display:block; padding:8px 10px; font-size:13px; text-decoration:none; color:var(--primary)">⚙️ Mở cài đặt AI Studio</a>
                     </div>
                 </div>
+
+                <!-- Khu vực hiển thị tin nhắn -->
                 <div class="chat-body" id="chatBody"></div>
+
+                <!-- Xem trước ảnh đính kèm -->
                 <div class="img-preview" id="imgPreview" style="display:none">
                     <img id="imgPreviewEl" src="">
-                    <span>Ảnh đính kèm</span>
+                    <span>Ảnh đính kèm sẵn sàng gửi</span>
                     <button class="btn btn-light btn-sm" id="btnRemoveImg">✕ Bỏ</button>
                 </div>
+
+                <!-- Thanh mẫu câu trả lời nhanh (Quick Replies) -->
+                <div class="quick-bar" id="quickBar">
+                    <span class="quick-bar-label">⚡ Mẫu nhanh:</span>
+                    <div id="quickReplyList" style="display:flex; gap:6px"></div>
+                </div>
+
+                <!-- Khung nhập tin nhắn -->
                 <div class="composer">
-                    <button class="icon-btn" id="btnAttach" title="Gửi ảnh">🖼️</button>
+                    <button class="icon-btn" id="btnAttach" title="Đính kèm hình ảnh">🖼️</button>
                     <input type="file" id="fileInput" accept="image/*" style="display:none">
-                    <textarea id="msgInput" rows="1" placeholder="Nhập tin nhắn... (Enter gửi, Shift+Enter xuống dòng)"></textarea>
-                    <button class="btn btn-primary" id="btnSend">Gửi</button>
+                    <textarea id="msgInput" rows="1" placeholder="Nhập tin nhắn hoặc gõ /chao, /baogia... (Enter để gửi, Shift+Enter xuống dòng)"></textarea>
+                    <button class="btn btn-primary" id="btnSend">Gửi tin ➤</button>
                 </div>
             </div>
         </div>
+
+        <!-- Cột 3: Bảng thông tin khách hàng CRM (Customer Inspector) -->
+        <aside class="crm-panel hidden" id="crmPanel">
+            <div class="crm-profile">
+                <div class="avatar" id="crmAvatar">👤</div>
+                <h3 id="crmName">Chưa chọn hội thoại</h3>
+                <div class="mono hint" id="crmMetaId">—</div>
+            </div>
+
+            <!-- Phân loại thẻ khách hàng -->
+            <div class="crm-section">
+                <h4>🏷️ Nhãn phân loại (Tags)</h4>
+                <div class="crm-tag-presets" id="crmTagPresets">
+                    <button type="button" class="crm-tag-btn" data-tag="VIP">VIP</button>
+                    <button type="button" class="crm-tag-btn" data-tag="Lead">Lead</button>
+                    <button type="button" class="crm-tag-btn" data-tag="Support">Support</button>
+                    <button type="button" class="crm-tag-btn" data-tag="Follow-up">Follow-up</button>
+                    <button type="button" class="crm-tag-btn" data-tag="Done">Done</button>
+                </div>
+                <input type="text" id="crmTagsInput" placeholder="Nhãn cách nhau bởi dấu phẩy (vd: VIP, Lead)">
+            </div>
+
+            <!-- Ghi chú chăm sóc khách hàng -->
+            <div class="crm-section">
+                <h4>📝 Ghi chú nội bộ (Notes)</h4>
+                <textarea id="crmNotesInput" placeholder="Ghi chú nhu cầu khách hàng, lịch hẹn gọi lại, thông tin đơn hàng..."></textarea>
+                <button class="btn btn-primary btn-sm btn-block" id="btnSaveCrm" style="margin-top:8px">💾 Lưu hồ sơ CRM</button>
+            </div>
+
+            <!-- Quản lý mẫu tin nhắn nhanh -->
+            <div class="crm-section" style="border-top:1px solid var(--border); padding-top:14px">
+                <h4>⚡ Tạo mẫu câu nhanh mới</h4>
+                <input type="text" id="qrShortcut" placeholder="Phím tắt (vd: stk)" style="margin-bottom:6px">
+                <input type="text" id="qrTitle" placeholder="Tiêu đề ngắn (vd: Số tài khoản)" style="margin-bottom:6px">
+                <textarea id="qrContent" placeholder="Nội dung tin nhắn mẫu..." style="min-height:64px"></textarea>
+                <button class="btn btn-light btn-sm btn-block" id="btnAddQuickReply" style="margin-top:6px">+ Lưu mẫu câu nhanh</button>
+            </div>
+        </aside>
     </div>
 </div>
 
-<!-- Modal QR -->
+<!-- Cửa sổ Modal quét QR kết nối Zalo -->
 <div class="modal-overlay" id="qrModal" style="display:none">
     <div class="modal">
-        <h2>Kết nối kênh Zalo</h2>
-        <p style="color:var(--text-sub)">Mở app Zalo trên điện thoại → quét mã QR</p>
-        <div class="qr-wrap" id="qrWrap"><span>Đang tạo QR...</span></div>
-        <div class="qr-status" id="qrStatus">Đang khởi tạo...</div>
+        <h2>Kết nối kênh Zalo cá nhân</h2>
+        <p style="color:var(--text-sub)">Mở ứng dụng Zalo trên điện thoại → Quét mã QR bên dưới</p>
+        <div class="qr-wrap" id="qrWrap"><span>Đang khởi tạo mã QR...</span></div>
+        <div class="qr-status" id="qrStatus">Đang kết nối...</div>
         <div class="close-row"><button class="btn btn-light" id="btnCloseQr">Đóng</button></div>
     </div>
 </div>

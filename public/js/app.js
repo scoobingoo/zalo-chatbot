@@ -1,10 +1,10 @@
 // =============================================
-// Zalo Inbox — logic trang inbox chính
+// ZaloFlow Studio — Logic điều khiển trang Inbox & CRM chính
 // =============================================
 (() => {
 'use strict';
 
-// ============ State ============
+// ============ Trạng thái ứng dụng (State) ============
 let me = null;
 let zaloStatus = null;
 let threads = [];
@@ -12,15 +12,34 @@ let currentThread = null;
 let oldestMsgId = 0;
 let pendingImageBase64 = null;
 let filterType = '';
+let filterTag = '';
 let searchTimer = null;
 let qrPollTimer = null;
 let currentLoginId = null;
-let aiSummary = null;      // trạng thái AI theo thread (từ /app/threads)
-let aiThreadState = null;  // trạng thái AI của thread đang mở
+let aiSummary = null;      // Trạng thái AI tổng hợp theo từng hội thoại
+let aiThreadState = null;  // Trạng thái AI chi tiết của hội thoại đang mở
+let quickReplies = [];     // Danh sách mẫu câu trả lời nhanh
 
 const $ = (id) => document.getElementById(id);
 
-// ============ Helpers ============
+// ============ Quản lý Giao diện Sáng / Tối (Theme) ============
+function initTheme() {
+    const saved = localStorage.getItem('zf_theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    const btn = $('btnTheme');
+    if (btn) btn.textContent = saved === 'dark' ? '☀️' : '🌙';
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('zf_theme', next);
+    const btn = $('btnTheme');
+    if (btn) btn.textContent = next === 'dark' ? '☀️' : '🌙';
+}
+
+// ============ Các hàm tiện ích (Helpers) ============
 async function api(path, options = {}) {
     const res = await fetch(path, {
         headers: { 'Content-Type': 'application/json' },
@@ -35,6 +54,7 @@ async function api(path, options = {}) {
 
 function toast(msg) {
     const el = $('toast');
+    if (!el) return;
     el.textContent = msg;
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 2600);
@@ -61,16 +81,15 @@ function timeFull(ts) {
     return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 }
 
-function dayLabel(ts) {
-    return new Date(Number(ts)).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+function avatarHtml(t, extraId = '') {
+    const idAttr = extraId ? ` id="${extraId}"` : '';
+    if (t.avatar_url) {
+        return `<img class="avatar"${idAttr} src="${esc(t.avatar_url)}" onerror="this.outerHTML='<div class=avatar${idAttr}>${t.type === 'group' ? '👥' : '👤'}</div>'">`;
+    }
+    return `<div class="avatar"${idAttr}>${t.type === 'group' ? '👥' : '👤'}</div>`;
 }
 
-function avatarHtml(t) {
-    if (t.avatar_url) return `<img class="avatar" src="${esc(t.avatar_url)}" onerror="this.outerHTML='<div class=avatar>${t.type === 'group' ? '👥' : '👤'}</div>'">`;
-    return `<div class="avatar">${t.type === 'group' ? '👥' : '👤'}</div>`;
-}
-
-// ============ Trạng thái kênh ============
+// ============ Hiển thị Trạng thái Kênh & Thống kê ============
 function renderChannelStatus() {
     const z = zaloStatus || {};
     const chip = $('channelChip');
@@ -86,17 +105,34 @@ function renderChannelStatus() {
     $('bannerDisconnected').style.display = z.connected ? 'none' : 'flex';
 }
 
-// ============ Danh sách hội thoại ============
+async function loadWorkspaceStats() {
+    try {
+        const json = await api('/app/stats');
+        if (!json.success) return;
+        const d = json.data;
+        if ($('statThreads')) $('statThreads').textContent = d.total_threads || 0;
+        if ($('statMessages')) $('statMessages').textContent = d.total_messages || 0;
+        if ($('statAiReplies')) $('statAiReplies').textContent = d.ai_messages || 0;
+    } catch { /* bỏ qua lỗi mạng tạm thời */ }
+}
+
+// ============ Danh sách Hội thoại ============
 async function loadThreads() {
     const search = $('searchInput').value.trim();
-    const json = await api(`/app/threads?search=${encodeURIComponent(search)}&type=${filterType}`);
+    const qs = new URLSearchParams({
+        search,
+        type: filterType,
+        tag: filterTag,
+    });
+    const json = await api(`/app/threads?${qs}`);
     if (!json.success) return;
     threads = json.data.threads;
     aiSummary = json.data.ai || null;
     renderThreads();
+    loadWorkspaceStats();
 }
 
-// Icon AI cho từng thread trong danh sách: 🤖 đang trả lời, ⏸️ tạm dừng, 🙋 cần người
+// Biểu tượng trạng thái AI cho từng hội thoại
 function aiIconFor(t) {
     if (!aiSummary || !aiSummary.enabled) return '';
     const o = aiSummary.overrides?.[t.thread_id];
@@ -110,10 +146,22 @@ function aiIconFor(t) {
     return on ? '<span class="ai-mark" title="AI đang bật">🤖</span>' : '';
 }
 
+// Hiển thị các thẻ phân loại CRM trên từng dòng hội thoại
+function renderThreadTagPills(tagsStr) {
+    if (!tagsStr) return '';
+    return tagsStr
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(tag => `<span class="crm-tag-mini">${esc(tag)}</span>`)
+        .join('');
+}
+
 function renderThreads() {
     const list = $('threadList');
     if (threads.length === 0) {
-        list.innerHTML = '<div class="empty-note">Chưa có hội thoại nào.<br>Bấm "Đồng bộ danh bạ" để import bạn bè + nhóm.</div>';
+        list.innerHTML = '<div class="empty-note">Không tìm thấy hội thoại phù hợp.<br>Bấm "📇 Đồng bộ" trên thanh công cụ để tải danh bạ &amp; nhóm từ Zalo.</div>';
         return;
     }
     list.innerHTML = threads.map(t => `
@@ -123,10 +171,11 @@ function renderThreads() {
                 <div class="thread-name">
                     <span class="name-text">${esc(t.name || '(Chưa có tên)')}</span>
                     <span class="badge-type ${t.type}">${t.type === 'group' ? 'NHÓM' : 'CÁ NHÂN'}</span>
+                    ${renderThreadTagPills(t.tags)}
                     ${aiIconFor(t)}
                 </div>
-                <div class="thread-id">${esc(t.thread_id)}</div>
-                <div class="thread-preview">${t.last_direction === 'out' ? 'Bạn: ' : ''}${esc(t.last_message || '')}</div>
+                <div class="thread-id">${esc(t.thread_id)}${t.phone ? ' · 📞 ' + esc(t.phone) : ''}</div>
+                <div class="thread-preview">${t.last_direction === 'out' ? 'Bạn: ' : ''}${esc(t.last_message || (t.notes ? '📝 ' + t.notes : 'Chưa có tin nhắn'))}</div>
             </div>
             <div class="thread-meta">
                 <div class="thread-time">${timeShort(t.last_message_at)}</div>
@@ -140,12 +189,12 @@ function renderThreads() {
     });
 }
 
-// ============ Mở hội thoại ============
+// ============ Mở Hội thoại & Hiển thị Hồ sơ CRM ============
 async function openThread(threadId) {
     const json = await api(`/app/messages/${encodeURIComponent(threadId)}`);
     if (!json.success) return;
 
-    currentThread = json.data.thread || { thread_id: threadId, type: 'user', name: '' };
+    currentThread = json.data.thread || { thread_id: threadId, type: 'user', name: '', tags: '', notes: '' };
     const msgs = json.data.messages;
     oldestMsgId = msgs.length > 0 ? msgs[0].id : 0;
 
@@ -158,17 +207,88 @@ async function openThread(threadId) {
     const badge = $('chatTypeBadge');
     badge.textContent = currentThread.type === 'group' ? 'NHÓM' : 'CÁ NHÂN';
     badge.className = 'badge-type ' + currentThread.type;
-    $('chatAvatar').outerHTML = avatarHtml(currentThread).replace('class="avatar"', 'class="avatar" id="chatAvatar"');
+    $('chatAvatar').outerHTML = avatarHtml(currentThread, 'chatAvatar');
     loadAiChip(threadId);
+    fillCrmPanel(currentThread);
 
     const body = $('chatBody');
-    body.innerHTML = (msgs.length >= 50 ? '<div class="load-more"><button class="btn btn-light btn-sm" id="btnLoadMore">Tải tin cũ hơn</button></div>' : '')
+    body.innerHTML = (msgs.length >= 50 ? '<div class="load-more"><button class="btn btn-light btn-sm" id="btnLoadMore">Tải tin nhắn cũ hơn</button></div>' : '')
         + msgs.map(renderMessage).join('');
     bindLoadMore();
     body.scrollTop = body.scrollHeight;
 
     // Đánh dấu đã đọc
     api(`/app/threads/${encodeURIComponent(threadId)}/read`, { method: 'POST' }).then(loadThreads);
+}
+
+// Điền dữ liệu vào cột CRM bên phải
+function fillCrmPanel(thread) {
+    if (!$('crmPanel')) return;
+    $('crmPanel').classList.remove('hidden');
+    $('crmAvatar').outerHTML = avatarHtml(thread, 'crmAvatar');
+    $('crmName').textContent = thread.name || '(Chưa có tên)';
+    $('crmMetaId').textContent = `ID: ${thread.thread_id}${thread.phone ? ' · SĐT: ' + thread.phone : ''}`;
+    $('crmTagsInput').value = thread.tags || '';
+    $('crmNotesInput').value = thread.notes || '';
+    syncCrmPresetButtons();
+}
+
+function syncCrmPresetButtons() {
+    const currentSet = new Set(
+        ($('crmTagsInput')?.value || '')
+            .split(',')
+            .map(x => x.trim().toLowerCase())
+            .filter(Boolean)
+    );
+    document.querySelectorAll('#crmTagPresets .crm-tag-btn').forEach(btn => {
+        btn.classList.toggle('selected', currentSet.has(btn.dataset.tag.toLowerCase()));
+    });
+}
+
+async function saveCurrentCrm() {
+    if (!currentThread) return;
+    const tags = $('crmTagsInput').value.trim();
+    const notes = $('crmNotesInput').value.trim();
+    const json = await api(`/app/threads/${encodeURIComponent(currentThread.thread_id)}/crm`, {
+        method: 'PATCH',
+        body: JSON.stringify({ tags, notes }),
+    });
+    if (json.success) {
+        currentThread = json.data.thread;
+        syncCrmPresetButtons();
+        toast('💾 Đã lưu hồ sơ CRM cho khách hàng');
+        loadThreads();
+    } else {
+        toast('❌ ' + (json.error?.message || 'Lỗi lưu CRM'));
+    }
+}
+
+// ============ Mẫu tin nhắn trả lời nhanh (Quick Replies) ============
+async function loadQuickReplies() {
+    try {
+        const json = await api('/app/quick-replies');
+        if (!json.success) return;
+        quickReplies = json.data.quick_replies || [];
+        renderQuickReplies();
+    } catch { /* bỏ qua */ }
+}
+
+function renderQuickReplies() {
+    const wrap = $('quickReplyList');
+    if (!wrap) return;
+    wrap.innerHTML = quickReplies.map(q => `
+        <button type="button" class="quick-pill" data-content="${esc(q.content)}" title="${esc(q.content)}">
+            <code>/${esc(q.shortcut)}</code>${esc(q.title)}
+        </button>
+    `).join('');
+    wrap.querySelectorAll('.quick-pill').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const input = $('msgInput');
+            input.value = btn.dataset.content;
+            input.focus();
+            input.dispatchEvent(new Event('input'));
+        });
+    });
 }
 
 function bindLoadMore() {
@@ -195,13 +315,12 @@ async function loadOlderMessages() {
     body.scrollTop = body.scrollHeight - prevHeight;
 }
 
-// ============ Render 1 tin nhắn ============
+// ============ Hiển thị 1 Tin nhắn ============
 function renderMessage(m) {
     let inner = '';
     if (m.content_type === 'text') {
         inner = esc(m.content);
     } else if (m.content_type === 'photo' || m.content_type === 'webchat') {
-        // content là JSON: { href, thumb, caption, ... }
         let obj = {};
         try { obj = JSON.parse(m.content); } catch { /* giữ obj rỗng */ }
         const src = obj.href || obj.thumb || obj.oriUrl || '';
@@ -215,7 +334,6 @@ function renderMessage(m) {
     } else if (m.content_type === 'sticker') {
         inner = `<span class="msg-special">[Sticker]</span>`;
     } else {
-        // voice / video / file / unknown — thử lấy href
         let obj = {};
         try { obj = JSON.parse(m.content); } catch { /* giữ obj rỗng */ }
         const label = { voice: '[Voice]', video: '[Video]', file: '[File: ' + (obj.title || '') + ']' }[m.content_type] || `[${m.content_type}]`;
@@ -246,7 +364,7 @@ function sourceLabel(m) {
     return '';
 }
 
-// ============ Trợ lý AI — chip trạng thái trong header chat ============
+// ============ Trợ lý AI — Chip trạng thái trong Header Chat ============
 const AI_CHIP_LABEL = { on: 'AI: Đang bật', off: 'AI: Tắt', paused: 'AI: Tạm dừng', needs_human: 'AI: Cần người' };
 function renderAiChip() {
     const chip = $('aiChip');
@@ -258,7 +376,7 @@ function renderAiChip() {
     if (st.effective === 'paused' && st.paused_remaining_s > 0) label += ` (${Math.ceil(st.paused_remaining_s / 60)} phút)`;
     $('aiChipLabel').textContent = label;
     const reasons = {
-        master_off: 'Công tắc tổng đang tắt (trang Trợ lý AI).', thread_off: 'Đã tắt riêng cho hội thoại này.',
+        master_off: 'Công tắc tổng đang tắt (trang AI Studio).', thread_off: 'Đã tắt riêng cho hội thoại này.',
         needs_human: 'AI đã chuyển cho nhân viên — bấm "Tiếp tục ngay" để AI trả lời lại.', paused: 'Người thật vừa trả lời nên AI tạm dừng.',
         thread_on: 'Bật riêng cho hội thoại này.', group_rule: 'Theo cấu hình nhóm (đang tắt / không trong danh sách).',
         group_mention: 'Theo cấu hình nhóm: chỉ trả lời khi được tag hoặc reply vào tin của bot.', group_all: 'Theo cấu hình nhóm: trả lời mọi tin.',
@@ -297,7 +415,7 @@ function appendMessage(m) {
     body.scrollTop = body.scrollHeight;
 }
 
-// ============ Gửi tin ============
+// ============ Gửi Tin nhắn ============
 async function sendCurrent() {
     if (!currentThread) return;
     const input = $('msgInput');
@@ -319,7 +437,6 @@ async function sendCurrent() {
             input.value = '';
             input.style.height = 'auto';
             clearImagePreview();
-            // Tin đã được emit qua SSE → nếu SSE chậm thì message_row đã có sẵn
             if (json.data.message_row && !document.querySelector(`[data-mid="${json.data.message_row.id}"]`)) {
                 appendMessage(json.data.message_row);
             }
@@ -329,7 +446,7 @@ async function sendCurrent() {
             if (json.error?.code === 'SESSION_EXPIRED' || json.error?.code === 'NOT_CONNECTED') refreshStatus();
         }
     } catch (e) {
-        toast('❌ Lỗi kết nối server');
+        toast('❌ Lỗi kết nối máy chủ');
     }
     btn.disabled = false;
     input.focus();
@@ -341,7 +458,7 @@ function clearImagePreview() {
     $('fileInput').value = '';
 }
 
-// ============ QR Connect ============
+// ============ Kết nối QR Zalo ============
 async function openQrModal() {
     $('qrModal').style.display = 'flex';
     $('qrWrap').innerHTML = '<span>Đang tạo QR...</span>';
@@ -354,12 +471,10 @@ async function openQrModal() {
     }
     currentLoginId = json.data.login_id;
 
-    // Chờ 1.5s cho file QR được tạo rồi hiện ảnh
     setTimeout(() => {
         $('qrWrap').innerHTML = `<img src="/app/zalo/qr-image/${currentLoginId}?t=${Date.now()}" onerror="setTimeout(()=>{this.src='/app/zalo/qr-image/${currentLoginId}?t='+Date.now()},1500)">`;
     }, 1500);
 
-    // Polling trạng thái
     clearInterval(qrPollTimer);
     qrPollTimer = setInterval(async () => {
         try {
@@ -370,7 +485,7 @@ async function openQrModal() {
                 return;
             }
             const s = st.data.status;
-            const labels = { waiting: 'Chờ quét mã...', scanned: '✅ Đã quét — xác nhận trên điện thoại', success: '🎉 Kết nối thành công!' };
+            const labels = { waiting: 'Chờ quét mã...', scanned: '✅ Đã quét — vui lòng xác nhận trên điện thoại', success: '🎉 Kết nối thành công!' };
             $('qrStatus').textContent = labels[s] || s;
             if (s === 'success') {
                 clearInterval(qrPollTimer);
@@ -379,7 +494,7 @@ async function openQrModal() {
                 setTimeout(() => { $('qrModal').style.display = 'none'; loadThreads(); }, 1200);
                 toast('✅ Kênh Zalo đã kết nối!');
             }
-        } catch (e) { /* poll tiếp */ }
+        } catch (e) { /* tiếp tục chờ */ }
     }, 2000);
 }
 
@@ -388,12 +503,11 @@ function closeQrModal() {
     clearInterval(qrPollTimer);
 }
 
-// ============ SSE realtime ============
+// ============ Kết nối Thời gian thực (SSE) ============
 function connectSSE() {
     const es = new EventSource('/app/events');
     es.addEventListener('message', (e) => {
-        const { message, thread } = JSON.parse(e.data);
-        // Đang mở đúng hội thoại → append + đánh dấu đọc
+        const { message } = JSON.parse(e.data);
         if (currentThread && message.thread_id === currentThread.thread_id) {
             if (!document.querySelector(`[data-mid="${message.id}"]`)) appendMessage(message);
             api(`/app/threads/${encodeURIComponent(message.thread_id)}/read`, { method: 'POST' });
@@ -405,7 +519,6 @@ function connectSSE() {
         renderChannelStatus();
     });
     es.addEventListener('threads_updated', () => loadThreads());
-    // Trợ lý AI
     es.addEventListener('ai_state', (e) => {
         const { thread_id, state } = JSON.parse(e.data);
         if (currentThread && thread_id === currentThread.thread_id) { aiThreadState = state; renderAiChip(); }
@@ -422,7 +535,6 @@ function connectSSE() {
         toast('⚠️ Trợ lý AI lỗi: ' + String(message || '').slice(0, 120));
     });
     es.onerror = () => {
-        // Tự reconnect sau 5s nếu đứt
         es.close();
         setTimeout(connectSSE, 5000);
     };
@@ -434,13 +546,15 @@ async function refreshStatus() {
         me = json.data.user;
         zaloStatus = json.data.zalo;
         $('brandName').textContent = json.data.app_name;
-        document.title = json.data.app_name;
+        document.title = json.data.app_name + ' — Workspace';
         renderChannelStatus();
     }
 }
 
-// ============ Events ============
+// ============ Gắn kết Sự kiện Giao diện (Events) ============
 function bindEvents() {
+    if ($('btnTheme')) $('btnTheme').addEventListener('click', toggleTheme);
+
     $('btnLogout').addEventListener('click', async () => {
         await api('/app/logout', { method: 'POST' });
         location.href = '/login.html';
@@ -451,7 +565,7 @@ function bindEvents() {
         toast('📇 Đang đồng bộ danh bạ...');
         const json = await api('/app/zalo/sync', { method: 'POST' });
         if (json.success) {
-            toast(`✅ Đã import ${json.data.friends} bạn bè, ${json.data.groups} nhóm`);
+            toast(`✅ Đã đồng bộ ${json.data.friends} bạn bè, ${json.data.groups} nhóm`);
             loadThreads();
         } else {
             toast('❌ ' + (json.error?.message || 'Lỗi đồng bộ'));
@@ -460,7 +574,7 @@ function bindEvents() {
 
     $('searchInput').addEventListener('input', () => {
         clearTimeout(searchTimer);
-        searchTimer = setTimeout(loadThreads, 300);
+        searchTimer = setTimeout(loadThreads, 260);
     });
 
     document.querySelectorAll('.filter-tabs button').forEach(btn => {
@@ -472,8 +586,81 @@ function bindEvents() {
         });
     });
 
+    // Lọc theo nhãn CRM
+    document.querySelectorAll('#tagFilterBar .tag-chip-filter').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('#tagFilterBar .tag-chip-filter').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            filterTag = btn.dataset.tag || '';
+            loadThreads();
+        });
+    });
+
+    // Ẩn/hiện cột CRM bên phải
+    if ($('btnToggleCrm')) {
+        $('btnToggleCrm').addEventListener('click', () => {
+            $('crmPanel').classList.toggle('hidden');
+        });
+    }
+
+    // Chọn nhanh nhãn CRM
+    document.querySelectorAll('#crmTagPresets .crm-tag-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tag = btn.dataset.tag;
+            const current = ($('crmTagsInput').value || '')
+                .split(',')
+                .map(x => x.trim())
+                .filter(Boolean);
+            const idx = current.findIndex(x => x.toLowerCase() === tag.toLowerCase());
+            if (idx >= 0) current.splice(idx, 1);
+            else current.push(tag);
+            $('crmTagsInput').value = current.join(', ');
+            syncCrmPresetButtons();
+        });
+    });
+    if ($('crmTagsInput')) $('crmTagsInput').addEventListener('input', syncCrmPresetButtons);
+    if ($('btnSaveCrm')) $('btnSaveCrm').addEventListener('click', saveCurrentCrm);
+
+    // Tạo mẫu câu trả lời nhanh mới
+    if ($('btnAddQuickReply')) {
+        $('btnAddQuickReply').addEventListener('click', async () => {
+            const shortcut = $('qrShortcut').value.trim().replace(/^\//, '');
+            const title = $('qrTitle').value.trim();
+            const content = $('qrContent').value.trim();
+            if (!shortcut || !title || !content) {
+                toast('⚠️ Vui lòng nhập đủ phím tắt, tiêu đề và nội dung');
+                return;
+            }
+            const json = await api('/app/quick-replies', {
+                method: 'POST',
+                body: JSON.stringify({ shortcut, title, content }),
+            });
+            if (json.success) {
+                quickReplies = json.data.quick_replies || [];
+                renderQuickReplies();
+                $('qrShortcut').value = '';
+                $('qrTitle').value = '';
+                $('qrContent').value = '';
+                toast('⚡ Đã lưu mẫu câu nhanh /' + shortcut);
+            } else {
+                toast('❌ ' + (json.error?.message || 'Lỗi lưu mẫu câu'));
+            }
+        });
+    }
+
     const msgInput = $('msgInput');
     msgInput.addEventListener('keydown', (e) => {
+        // Mở rộng phím tắt /shortcut khi nhấn phím Space hoặc Tab
+        if ((e.key === ' ' || e.key === 'Tab') && msgInput.value.startsWith('/')) {
+            const code = msgInput.value.slice(1).trim().toLowerCase();
+            const found = quickReplies.find(q => q.shortcut === code);
+            if (found) {
+                e.preventDefault();
+                msgInput.value = found.content;
+                msgInput.dispatchEvent(new Event('input'));
+                return;
+            }
+        }
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendCurrent();
@@ -503,12 +690,12 @@ function bindEvents() {
     $('btnCopyId').addEventListener('click', () => {
         if (currentThread) {
             navigator.clipboard.writeText(currentThread.thread_id);
-            toast('📋 Đã copy ID: ' + currentThread.thread_id);
+            toast('📋 Đã sao chép ID: ' + currentThread.thread_id);
         }
     });
     $('btnBack').addEventListener('click', () => $('app').classList.remove('chat-open'));
 
-    // Chip AI + menu
+    // Chip AI + Menu
     $('aiChip').addEventListener('click', (e) => {
         e.stopPropagation();
         const menu = $('aiMenu');
@@ -522,7 +709,7 @@ function bindEvents() {
     }));
     document.addEventListener('click', (e) => { if (!$('aiMenu').contains(e.target)) $('aiMenu').style.display = 'none'; });
 
-    // Paste ảnh trực tiếp vào composer
+    // Hỗ trợ dán ảnh trực tiếp từ Clipboard vào khung soạn thảo
     msgInput.addEventListener('paste', (e) => {
         const items = e.clipboardData?.items || [];
         for (const item of items) {
@@ -542,15 +729,15 @@ function bindEvents() {
     });
 }
 
-// ============ Init ============
+// ============ Khởi chạy Ứng dụng ============
 (async function init() {
+    initTheme();
     try {
         await refreshStatus();
-    } catch (e) { return; } // 401 → đã redirect login
+    } catch (e) { return; }
     bindEvents();
-    await loadThreads();
+    await Promise.all([loadThreads(), loadQuickReplies()]);
     connectSSE();
-    // Refresh trạng thái mỗi 60s (phòng SSE miss)
     setInterval(refreshStatus, 60000);
 })();
 
