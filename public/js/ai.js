@@ -482,13 +482,29 @@ function connectSSE() {
     es.onerror = () => { es.close(); setTimeout(connectSSE, 5000); };
 }
 
+// ============ Chuyển đổi Giao diện Sáng / Tối ============
+function initTheme() {
+    const saved = localStorage.getItem('zf_theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    if ($('btnTheme')) $('btnTheme').textContent = saved === 'dark' ? '☀️' : '🌙';
+}
+if ($('btnTheme')) {
+    $('btnTheme').addEventListener('click', () => {
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('zf_theme', next);
+        $('btnTheme').textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+}
+
 $('btnLogout').addEventListener('click', async () => { await api('/app/logout', { method: 'POST' }); location.href = '/login.html'; });
 
 // ============ Init ============
 (async function init() {
+    initTheme();
     try {
         const me = await api('/app/me');
-        if (me.success) document.title = 'Trợ lý AI — ' + me.data.app_name;
+        if (me.success) document.title = 'AI Agent Studio — ' + me.data.app_name;
         await load();
     } catch (e) { return; }
     connectSSE();
