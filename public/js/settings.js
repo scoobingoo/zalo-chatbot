@@ -272,6 +272,21 @@ async function loadUsers() {
     }));
 }
 
+// ============ Chuyển đổi Giao diện Sáng / Tối ============
+function initTheme() {
+    const saved = localStorage.getItem('zf_theme') || 'light';
+    document.documentElement.setAttribute('data-theme', saved);
+    if ($('btnTheme')) $('btnTheme').textContent = saved === 'dark' ? '☀️' : '🌙';
+}
+if ($('btnTheme')) {
+    $('btnTheme').addEventListener('click', () => {
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('zf_theme', next);
+        $('btnTheme').textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+}
+
 // ============ Events ============
 $('btnLogout').addEventListener('click', async () => {
     await api('/app/logout', { method: 'POST' });
@@ -318,6 +333,7 @@ $('btnChangeMyPass').addEventListener('click', async () => {
 
 // ============ Init ============
 (async function init() {
+    initTheme();
     try { await loadZaloInfo(); } catch (e) { return; }
     renderApiDocs();
     loadKeys();
