@@ -3,23 +3,30 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cài đặt & API — Zalo Inbox</title>
+<title>Cài đặt, MCP &amp; REST API — ZaloFlow Studio</title>
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
 <div class="app page-scroll">
+    <!-- Thanh điều hướng trên cùng (Topbar) -->
     <div class="topbar">
-        <div class="brand">💬 <span id="brandName">Zalo Inbox</span></div>
+        <div class="brand">
+            <span>⚙️</span>
+            <span id="brandName">ZaloFlow Studio</span>
+            <span class="brand-badge">API + MCP</span>
+        </div>
         <div class="spacer"></div>
-        <a href="/">← Về Inbox</a>
-        <a href="/ai.html">🤖 Trợ lý AI</a>
+        <a href="/">💬 Inbox &amp; CRM</a>
+        <a href="/ai.html">🤖 AI Studio</a>
+        <a href="/settings.html" class="active-nav">⚙️ Cài đặt &amp; API</a>
+        <button class="theme-btn" id="btnTheme" title="Chuyển đổi giao diện Sáng / Tối">🌙</button>
         <button class="navlink" id="btnLogout">Đăng xuất</button>
     </div>
 
     <div class="settings-wrap">
-        <!-- Kênh Zalo -->
+        <!-- Trạng thái Kênh Zalo -->
         <div class="card">
-            <h2>📱 Kênh Zalo</h2>
+            <h2>📱 Trạng thái Kênh Zalo</h2>
             <div id="zaloInfo">Đang tải...</div>
         </div>
 

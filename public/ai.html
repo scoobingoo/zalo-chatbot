@@ -3,16 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trợ lý AI — Zalo Inbox</title>
+<title>AI Agent Studio — ZaloFlow Studio</title>
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
 <div class="app page-scroll">
+    <!-- Thanh điều hướng trên cùng (Topbar) -->
     <div class="topbar">
-        <div class="brand">🤖 <span id="brandName">Trợ lý AI</span></div>
+        <div class="brand">
+            <span>🤖</span>
+            <span id="brandName">AI Agent Studio</span>
+            <span class="brand-badge">MULTI-LLM</span>
+        </div>
         <div class="spacer"></div>
-        <a href="/">← Về Inbox</a>
-        <a href="/settings.html">⚙️ Cài đặt & API</a>
+        <a href="/">💬 Inbox &amp; CRM</a>
+        <a href="/ai.html" class="active-nav">🤖 AI Studio</a>
+        <a href="/settings.html">⚙️ Cài đặt &amp; API</a>
+        <button class="theme-btn" id="btnTheme" title="Chuyển đổi giao diện Sáng / Tối">🌙</button>
         <button class="navlink" id="btnLogout">Đăng xuất</button>
     </div>
 
@@ -30,13 +37,13 @@
 
         <div class="card">
             <div class="tabs" id="tabs">
-                <button data-tab="overview" class="active">Tổng quan</button>
-                <button data-tab="providers">Provider</button>
-                <button data-tab="instruction">Instruction & Thử nhanh</button>
-                <button data-tab="scope">Phạm vi trả lời</button>
-                <button data-tab="tools">Tools</button>
-                <button data-tab="advanced">Nâng cao</button>
-                <button data-tab="logs">Nhật ký</button>
+                <button data-tab="overview" class="active">📊 Tổng quan</button>
+                <button data-tab="providers">🔌 Providers &amp; Models</button>
+                <button data-tab="instruction">🧠 System Prompt &amp; Playground</button>
+                <button data-tab="scope">🎯 Phạm vi trả lời</button>
+                <button data-tab="tools">🛠️ Function Tools</button>
+                <button data-tab="advanced">⚡ Cấu hình nâng cao</button>
+                <button data-tab="logs">📜 Nhật ký hoạt động</button>
             </div>
 
             <!-- ===== Tổng quan ===== -->
