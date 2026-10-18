@@ -10,7 +10,8 @@ module.exports = {
     ROOT,
     PORT: parseInt(process.env.PORT || '3100', 10),
     HOST: process.env.HOST || '0.0.0.0',
-    APP_NAME: process.env.APP_NAME || 'Zalo Inbox',
+    // Tên hiển thị của hệ thống trên giao diện Web & API
+    APP_NAME: process.env.APP_NAME || 'ZaloFlow Studio',
     MCP_PUBLIC_URL: process.env.MCP_PUBLIC_URL || `http://localhost:${process.env.PORT || '3100'}`,
     MCP_SEND_INTERVAL_MS: Math.max(1000, parseInt(process.env.MCP_SEND_INTERVAL_MS || '2000', 10) || 2000),
     MCP_ALLOWED_ORIGINS: (process.env.MCP_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean),

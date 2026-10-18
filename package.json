@@ -1,7 +1,7 @@
 {
   "name": "zalo-inbox",
-  "version": "1.2.1",
-  "description": "Zalo Inbox — quản lý 1 kênh Zalo cá nhân: web trực chat + REST API + MCP + Trợ lý AI (1 domain = 1 kênh)",
+  "version": "2.0.0",
+  "description": "ZaloFlow Studio — Omnichannel Zalo CRM, Multi-Provider AI Agent & Model Context Protocol (MCP) Gateway",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
