@@ -104,10 +104,11 @@ async function start() {
     seedAdminUser();
 
     app.listen(config.PORT, config.HOST, async () => {
-        logger.info('╔══════════════════════════════════════════════╗');
-        logger.info(`║  ZALO INBOX — ${config.APP_NAME}`);
-        logger.info(`║  🌐 http://localhost:${config.PORT}`);
-        logger.info('╚══════════════════════════════════════════════╝');
+        logger.info('╔══════════════════════════════════════════════════╗');
+        logger.info(`║  🚀 ZALOFLOW STUDIO v2.0 — ${config.APP_NAME}`);
+        logger.info(`║  🌐 Workspace URL : http://localhost:${config.PORT}`);
+        logger.info(`║  🔌 MCP Endpoint  : http://localhost:${config.PORT}/mcp`);
+        logger.info('╚══════════════════════════════════════════════════╝');
 
         // Khôi phục kênh Zalo từ DB (không cần quét QR lại sau restart)
         logger.info('🔄 Đang khôi phục kênh Zalo...');
