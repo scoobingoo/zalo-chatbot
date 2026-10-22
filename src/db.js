@@ -210,12 +210,27 @@ const threads = {
                 updated_at = excluded.updated_at
         `).run(threadId, type, name || '', Date.now()),
 
+    // Cập nhật tin cuối: chỉ ghi đè preview khi thời gian sent_at mới hơn hoặc bằng last_message_at hiện có
     updateLastMessage: (threadId, text, at, direction, incUnread) =>
         db.prepare(`
-            UPDATE threads SET last_message = ?, last_message_at = ?, last_direction = ?,
-                unread_count = unread_count + ?, updated_at = ?
+            UPDATE threads SET
+                last_message = CASE WHEN last_message_at IS NULL OR ? >= last_message_at THEN ? ELSE last_message END,
+                last_message_at = CASE WHEN last_message_at IS NULL OR ? >= last_message_at THEN ? ELSE last_message_at END,
+                last_direction = CASE WHEN last_message_at IS NULL OR ? >= last_message_at THEN ? ELSE last_direction END,
+                unread_count = unread_count + ?,
+                updated_at = ?
             WHERE thread_id = ?
-        `).run(text, at, direction, incUnread ? 1 : 0, Date.now(), threadId),
+        `).run(at, text, at, at, at, direction, incUnread ? 1 : 0, Date.now(), threadId),
+
+    // Bổ sung tên và ảnh đại diện cho các hội thoại người lạ được phát hiện khi đồng bộ lịch sử tin nhắn
+    updateProfileIfMissing: ({ threadId, name, avatarUrl }) =>
+        db.prepare(`
+            UPDATE threads SET
+                name = CASE WHEN (name = '' OR name IS NULL) AND ? != '' THEN ? ELSE name END,
+                avatar_url = CASE WHEN (avatar_url = '' OR avatar_url IS NULL) AND ? != '' THEN ? ELSE avatar_url END,
+                updated_at = ?
+            WHERE thread_id = ?
+        `).run(name || '', name || '', avatarUrl || '', avatarUrl || '', Date.now(), threadId),
 
     resetUnread: (threadId) =>
         db.prepare('UPDATE threads SET unread_count = 0 WHERE thread_id = ?').run(threadId),
@@ -329,11 +344,18 @@ const messages = {
 
     findById: (id) => db.prepare('SELECT * FROM messages WHERE id = ?').get(id),
 
-    // Phân trang lùi: lấy limit tin mới nhất trước before_id (0 = mới nhất)
+    // Phân trang lùi: sắp xếp theo thời gian thực gửi (sent_at) để tin đồng bộ lịch sử hiển thị chuẩn thứ tự
     listByThread: (threadId, beforeId = 0, limit = 50) => {
-        const rows = beforeId > 0
-            ? db.prepare('SELECT * FROM messages WHERE thread_id = ? AND id < ? ORDER BY id DESC LIMIT ?').all(threadId, beforeId, limit)
-            : db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?').all(threadId, limit);
+        if (beforeId > 0) {
+            const pivot = db.prepare('SELECT id, sent_at FROM messages WHERE id = ?').get(beforeId);
+            const rows = pivot
+                ? db.prepare('SELECT * FROM messages WHERE thread_id = ? AND (sent_at < ? OR (sent_at = ? AND id < ?)) ORDER BY sent_at DESC, id DESC LIMIT ?')
+                    .all(threadId, pivot.sent_at, pivot.sent_at, pivot.id, limit)
+                : db.prepare('SELECT * FROM messages WHERE thread_id = ? AND id < ? ORDER BY sent_at DESC, id DESC LIMIT ?')
+                    .all(threadId, beforeId, limit);
+            return rows.reverse();
+        }
+        const rows = db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?').all(threadId, limit);
         return rows.reverse(); // trả về theo thứ tự cũ → mới
     },
 };
