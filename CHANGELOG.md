@@ -1,6 +1,15 @@
 # Changelog
 
-Mọi thay đổi đáng chú ý của Zalo Inbox. Phiên bản theo [SemVer](https://semver.org/lang/vi/): **MAJOR** đổi cách cài/cấu hình, **MINOR** thêm tính năng, **PATCH** sửa lỗi. Cập nhật bằng `bash update.sh`.
+Mọi thay đổi đáng chú ý của ZaloFlow Studio (Zalo Inbox). Phiên bản theo [SemVer](https://semver.org/lang/vi/): **MAJOR** đổi cách cài/cấu hình, **MINOR** thêm tính năng, **PATCH** sửa lỗi. Cập nhật bằng `bash update.sh`.
+
+## [2.0.0] — 2026-10-22
+
+### Thêm mới
+- **Thiết kế lại toàn bộ Giao diện (Modern SaaS UI v2.0)**: Hỗ trợ chuyển đổi **Light Mode / Dark Mode**, bảng màu Indigo & Electric Blue, trang đăng nhập Split-screen hiện đại và bố cục Inbox 3 cột.
+- **Customer CRM Inspector**: Gắn thẻ phân loại hội thoại (`VIP`, `Lead`, `Support`, `Follow-up`, `Done`), lọc danh sách theo nhãn hoặc tin chưa đọc, và lưu ghi chú nội bộ trực tiếp cho từng khách hàng (`PATCH /app/threads/:id/crm`).
+- **Quick Replies (Mẫu câu trả lời nhanh)**: Quản lý mẫu câu (`/chao`, `/baogia`, `/sdt`, `/camon`) và gõ tắt `/shortcut` + `Space`/`Tab` ngay trong khung soạn thảo.
+- **Workspace Analytics (`GET /app/stats`)**: Hiển thị trực tiếp số lượng hội thoại, tổng tin nhắn vào/ra và số lượt AI tự động phản hồi trên thanh công cụ.
+- **Tài liệu Portfolio tiếng Anh**: Viết mới toàn bộ `README.md` bằng tiếng Anh kèm sơ đồ kiến trúc Mermaid và mẫu PR chuẩn `.github/pull_request_template.md`.
 
 ## [1.2.1] — 2026-09-05
 
