@@ -136,3 +136,56 @@ test('Analytics: lấy thống kê tổng quan qua GET /app/stats', async () => 
     assert.equal(statsRes.json.data.messages_out, 1);
     assert.equal(statsRes.json.data.ai_messages, 1);
 });
+
+test('History Sync: đồng bộ tin nhắn cũ không ghi đè preview mới hơn và sắp xếp đúng theo sent_at', async () => {
+    const now = Date.now();
+    store.threads.ensureExists('u_stranger', 'user', '');
+
+    // Tin nhắn mới nhất được ghi nhận trước
+    store.messages.insert({
+        msgId: 'hist_new',
+        threadId: 'u_stranger',
+        direction: 'in',
+        source: 'zalo',
+        senderId: 'u_stranger',
+        senderName: 'Khách Mới',
+        content: 'Tin nhắn mới nhất',
+        contentType: 'text',
+        sentAt: now,
+    });
+    store.threads.updateLastMessage('u_stranger', 'Tin nhắn mới nhất', now, 'in', true);
+
+    // Tin nhắn lịch sử cũ hơn được đồng bộ về sau (ID lớn hơn nhưng sent_at nhỏ hơn)
+    store.messages.insert({
+        msgId: 'hist_old',
+        threadId: 'u_stranger',
+        direction: 'out',
+        source: 'app',
+        senderId: 'self',
+        senderName: 'Tôi',
+        content: 'Tin nhắn từ hôm qua',
+        contentType: 'text',
+        sentAt: now - 86400000,
+    });
+    store.threads.updateLastMessage('u_stranger', 'Tin nhắn từ hôm qua', now - 86400000, 'out', false);
+
+    // Làm giàu thông tin profile cho người lạ chưa có tên
+    store.threads.updateProfileIfMissing({
+        threadId: 'u_stranger',
+        name: 'Nguyễn Văn Lạ',
+        avatarUrl: 'https://example.com/avt.jpg',
+    });
+
+    const thread = store.threads.get('u_stranger');
+    assert.equal(thread.last_message, 'Tin nhắn mới nhất');
+    assert.equal(thread.last_message_at, now);
+    assert.equal(thread.unread_count, 1);
+    assert.equal(thread.name, 'Nguyễn Văn Lạ');
+
+    // Kiểm tra danh sách tin nhắn trả về theo đúng thứ tự thời gian (cũ → mới)
+    const msgList = store.messages.listByThread('u_stranger', 0, 50);
+    assert.equal(msgList.length, 2);
+    assert.equal(msgList[0].msg_id, 'hist_old');
+    assert.equal(msgList[1].msg_id, 'hist_new');
+});
+

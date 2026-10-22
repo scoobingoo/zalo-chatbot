@@ -518,7 +518,24 @@ function connectSSE() {
         zaloStatus = JSON.parse(e.data);
         renderChannelStatus();
     });
-    es.addEventListener('threads_updated', () => loadThreads());
+    es.addEventListener('threads_updated', () => {
+        loadThreads();
+        loadStats();
+    });
+    es.addEventListener('history_synced', (e) => {
+        try {
+            const data = JSON.parse(e.data || '{}');
+            loadThreads();
+            loadStats();
+            if (currentThread) {
+                openThread(currentThread.thread_id);
+            }
+            if (data.imported > 0) {
+                const label = data.type === 'group' ? 'Nhóm' : 'Cá nhân';
+                toast(`📥 Đã đồng bộ thêm ${data.imported} tin nhắn lịch sử (${label})`);
+            }
+        } catch (err) { /* bỏ qua */ }
+    });
     es.addEventListener('ai_state', (e) => {
         const { thread_id, state } = JSON.parse(e.data);
         if (currentThread && thread_id === currentThread.thread_id) { aiThreadState = state; renderAiChip(); }
@@ -562,11 +579,12 @@ function bindEvents() {
     $('btnConnect').addEventListener('click', openQrModal);
     $('btnCloseQr').addEventListener('click', closeQrModal);
     $('btnSync').addEventListener('click', async () => {
-        toast('📇 Đang đồng bộ danh bạ...');
+        toast('🔄 Đang đồng bộ danh bạ & lịch sử tin nhắn từ Zalo...');
         const json = await api('/app/zalo/sync', { method: 'POST' });
         if (json.success) {
-            toast(`✅ Đã đồng bộ ${json.data.friends} bạn bè, ${json.data.groups} nhóm`);
+            toast(`✅ Đã đồng bộ ${json.data.friends} bạn bè, ${json.data.groups} nhóm — đang tải lịch sử tin nhắn...`);
             loadThreads();
+            loadStats();
         } else {
             toast('❌ ' + (json.error?.message || 'Lỗi đồng bộ'));
         }

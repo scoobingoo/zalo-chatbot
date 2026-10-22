@@ -117,6 +117,20 @@ router.post('/zalo/sync', async (req, res) => {
     }
 });
 
+// Đồng bộ lịch sử tin nhắn cũ từ Zalo Server (giống Zalo PC)
+router.post('/zalo/sync-messages', (req, res) => {
+    try {
+        const maxPages = Math.min(Math.max(parseInt(req.body?.max_pages || '6', 10) || 6, 1), 15);
+        const result = zaloChannel.syncOldMessages(maxPages);
+        if (!result.requested) {
+            return fail(res, 'NOT_CONNECTED', result.reason || 'Kênh Zalo chưa sẵn sàng đồng bộ', 409);
+        }
+        ok(res, result);
+    } catch (err) {
+        fail(res, err.code || 'INTERNAL_ERROR', err.message, 500);
+    }
+});
+
 // ==========================================
 // Hội thoại + tin nhắn
 // ==========================================
