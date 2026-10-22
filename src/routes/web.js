@@ -169,13 +169,20 @@ router.post('/threads/:thread_id/read', (req, res) => {
     ok(res, {});
 });
 
-// Cập nhật thông tin CRM (thẻ phân loại tags + ghi chú notes) cho hội thoại
+// Cập nhật thông tin CRM (tên, SĐT, thẻ phân loại tags + ghi chú notes) cho hội thoại
 router.patch('/threads/:thread_id/crm', (req, res) => {
     const threadId = String(req.params.thread_id);
-    const { tags, notes } = req.body || {};
+    const { name, phone, tags, notes } = req.body || {};
+    const safeName = name !== undefined ? String(name).slice(0, 150) : undefined;
+    const safePhone = phone !== undefined ? String(phone).slice(0, 40) : undefined;
     const safeTags = tags !== undefined ? String(tags).slice(0, 250) : undefined;
     const safeNotes = notes !== undefined ? String(notes).slice(0, 4000) : undefined;
-    const updated = store.threads.updateCrm(threadId, { tags: safeTags, notes: safeNotes });
+    const updated = store.threads.updateCrm(threadId, {
+        name: safeName,
+        phone: safePhone,
+        tags: safeTags,
+        notes: safeNotes,
+    });
     if (!updated) return fail(res, 'NOT_FOUND', 'Không tìm thấy hội thoại', 404);
     sse.broadcast('threads_updated', {});
     ok(res, { thread: updated });

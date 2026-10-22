@@ -235,14 +235,16 @@ const threads = {
     resetUnread: (threadId) =>
         db.prepare('UPDATE threads SET unread_count = 0 WHERE thread_id = ?').run(threadId),
 
-    // Cập nhật thông tin CRM (thẻ phân loại tags + ghi chú notes) cho hội thoại
-    updateCrm: (threadId, { tags, notes }) => {
+    // Cập nhật thông tin CRM (tên, số điện thoại, thẻ phân loại tags + ghi chú notes) cho hội thoại
+    updateCrm: (threadId, { name, phone, tags, notes }) => {
         const current = db.prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
         if (!current) return null;
+        const nextName = name !== undefined ? String(name).trim() : (current.name || '');
+        const nextPhone = phone !== undefined ? String(phone).trim() : (current.phone || '');
         const nextTags = tags !== undefined ? String(tags).trim() : (current.tags || '');
         const nextNotes = notes !== undefined ? String(notes).trim() : (current.notes || '');
-        db.prepare('UPDATE threads SET tags = ?, notes = ?, updated_at = ? WHERE thread_id = ?')
-            .run(nextTags, nextNotes, Date.now(), threadId);
+        db.prepare('UPDATE threads SET name = ?, phone = ?, tags = ?, notes = ?, updated_at = ? WHERE thread_id = ?')
+            .run(nextName, nextPhone, nextTags, nextNotes, Date.now(), threadId);
         return db.prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
     },
 
@@ -343,6 +345,17 @@ const messages = {
         msgId ? !!db.prepare('SELECT 1 FROM messages WHERE msg_id = ? LIMIT 1').get(msgId) : false,
 
     findById: (id) => db.prepare('SELECT * FROM messages WHERE id = ?').get(id),
+
+    // Lấy msg_id mới nhất đã lưu theo loại hội thoại (user / group) để làm con trỏ nhảy nhanh khi đồng bộ WebSocket
+    getLatestActionId: (threadType) => {
+        const row = db.prepare(`
+            SELECT m.msg_id FROM messages m
+            JOIN threads t ON t.thread_id = m.thread_id
+            WHERE t.type = ? AND m.msg_id != '' AND m.msg_id GLOB '[0-9]*'
+            ORDER BY m.sent_at DESC, m.id DESC LIMIT 1
+        `).get(threadType);
+        return row?.msg_id || null;
+    },
 
     // Phân trang lùi: sắp xếp theo thời gian thực gửi (sent_at) để tin đồng bộ lịch sử hiển thị chuẩn thứ tự
     listByThread: (threadId, beforeId = 0, limit = 50) => {
