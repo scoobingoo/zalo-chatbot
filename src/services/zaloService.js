@@ -318,8 +318,30 @@ class ZaloChannel extends EventEmitter {
     // ==========================================
     // Import danh bạ: bạn bè + nhóm → bảng threads
     // ==========================================
-    async syncContacts() {
+    async syncContacts(forceContacts = false) {
         this._requireConnected();
+
+        // 0. Đảm bảo WebSocket listener đang mở và yêu cầu đồng bộ lịch sử tin nhắn NGAY LẬP TỨC (không chờ tải danh bạ)
+        if (this.api?.listener && (!this.isListening || !this.api.listener.ws)) {
+            try {
+                this.api.listener.start({ retryOnClose: true });
+                this.isListening = true;
+            } catch { /* đã start hoặc đang kết nối */ }
+        }
+        this.syncOldMessages(15);
+
+        // Chống lỗi HTTP 429 từ Zalo khi người dùng bấm nút Đồng bộ liên tục trong 45 giây
+        const now = Date.now();
+        if (!forceContacts && this._lastContactsSyncAt && (now - this._lastContactsSyncAt) < 45000 && this._lastContactsCounts) {
+            this.emit('threads_updated', {});
+            return {
+                friends: this._lastContactsCounts.friends,
+                groups: this._lastContactsCounts.groups,
+                history_sync_requested: true,
+                cached_contacts: true,
+            };
+        }
+
         let friendCount = 0;
         let groupCount = 0;
 
@@ -381,8 +403,10 @@ class ZaloChannel extends EventEmitter {
             logger.warn(`⚠️ [${this.zaloId}] Lỗi import nhóm: ${e.message}`);
         }
 
-        // 3. Yêu cầu đồng bộ lịch sử tin nhắn cũ từ WebSocket Zalo (giống Zalo PC)
-        this.syncOldMessages(6);
+        if (friendCount > 0 || groupCount > 0) {
+            this._lastContactsSyncAt = Date.now();
+            this._lastContactsCounts = { friends: friendCount, groups: groupCount };
+        }
 
         this.emit('threads_updated', {});
         return { friends: friendCount, groups: groupCount, history_sync_requested: true };
@@ -391,8 +415,9 @@ class ZaloChannel extends EventEmitter {
     // ==========================================
     // Đồng bộ lịch sử tin nhắn cũ (giống Zalo PC)
     // Sử dụng WebSocket cmd 510 (User) & 511 (Group) của zca-js
+    // Lưu ý kỹ thuật: truyền lastId='1' thay vì null để máy chủ Zalo luôn phản hồi ở mọi lần bấm
     // ==========================================
-    syncOldMessages(maxPages = 6) {
+    syncOldMessages(maxPages = 15) {
         if (!this.api?.listener || !this.isListening) {
             return { requested: false, reason: 'Listener chưa hoạt động' };
         }
@@ -401,15 +426,45 @@ class ZaloChannel extends EventEmitter {
             [ThreadType.Group]: { pages: 0, maxPages, lastActionId: null },
         };
         try {
-            this.api.listener.requestOldMessages(ThreadType.User, null);
+            // Truyền '1' để lấy từ đầu hàng đợi WebSocket và luôn được Zalo phản hồi kể cả khi gọi nhiều lần trong 1 phiên
+            this.api.listener.requestOldMessages(ThreadType.User, '1');
+            const latestUserActionId = store.messages.getLatestActionId?.('user');
+            if (latestUserActionId && latestUserActionId !== '1') {
+                setTimeout(() => {
+                    try {
+                        if (this.isListening && this.api?.listener) {
+                            this.api.listener.requestOldMessages(ThreadType.User, latestUserActionId);
+                        }
+                    } catch {}
+                }, 300);
+            }
         } catch (e) {
             logger.warn(`⚠️ [${this.zaloId}] Lỗi requestOldMessages(User): ${e.message}`);
         }
         try {
-            this.api.listener.requestOldMessages(ThreadType.Group, null);
+            this.api.listener.requestOldMessages(ThreadType.Group, '1');
+            const latestGroupActionId = store.messages.getLatestActionId?.('group');
+            if (latestGroupActionId && latestGroupActionId !== '1') {
+                setTimeout(() => {
+                    try {
+                        if (this.isListening && this.api?.listener) {
+                            this.api.listener.requestOldMessages(ThreadType.Group, latestGroupActionId);
+                        }
+                    } catch {}
+                }, 350);
+            }
         } catch (e) {
             logger.warn(`⚠️ [${this.zaloId}] Lỗi requestOldMessages(Group): ${e.message}`);
         }
+        // Làm giàu avatar & tên cho các hội thoại đã có tin nhắn nhưng còn thiếu ảnh đại diện
+        try {
+            const allThreads = store.threads.list({});
+            const missingUsers = allThreads.filter(t => t.type === 'user' && (!t.name || !t.avatar_url)).map(t => t.thread_id).slice(0, 40);
+            const missingGroups = allThreads.filter(t => t.type === 'group' && (!t.name || !t.avatar_url)).map(t => t.thread_id).slice(0, 20);
+            if (missingUsers.length || missingGroups.length) {
+                this._enrichMissingProfiles(missingUsers, missingGroups).catch(() => {});
+            }
+        } catch {}
         logger.info(`🔄 [${this.zaloId}] Đã gửi yêu cầu đồng bộ lịch sử tin nhắn Zalo qua WebSocket...`);
         return { requested: true, maxPages };
     }
@@ -738,7 +793,7 @@ class ZaloChannel extends EventEmitter {
         this.api.listener.on('cipher_key', () => {
             logger.info(`🔐 [${zaloId}] WebSocket đã nhận cipher_key — bắt đầu đồng bộ lịch sử tin nhắn cũ...`);
             setTimeout(() => {
-                if (this.isListening) this.syncOldMessages(6);
+                if (this.isListening) this.syncOldMessages(15);
             }, 500);
         });
 
@@ -748,17 +803,16 @@ class ZaloChannel extends EventEmitter {
                 if (!Array.isArray(messages) || messages.length === 0) return;
                 const isGroup = threadType === ThreadType.Group;
                 const resolvedType = isGroup ? 'group' : 'user';
-                const importedCount = await this._ingestHistoryMessages(messages, resolvedType);
+                await this._ingestHistoryMessages(messages, resolvedType);
 
-                // Nếu trang đầu trả về đầy đủ (ví dụ >= 20 tin) và có actionId lớn nhất, thử lấy tiếp tin mới hơn nếu còn
+                // Tiếp tục phân trang theo chiều tăng actionId (kể cả khi lô đầu đã có trong DB nên importedCount = 0)
                 const syncState = this._oldMsgSyncState?.[threadType];
                 if (syncState) {
                     syncState.pages += 1;
                     const newestMsg = messages[messages.length - 1];
                     const newestActionId = newestMsg?.data?.actionId || newestMsg?.data?.msgId || null;
                     if (
-                        importedCount > 0 &&
-                        messages.length >= 20 &&
+                        messages.length >= 15 &&
                         newestActionId &&
                         newestActionId !== syncState.lastActionId &&
                         syncState.pages < syncState.maxPages
@@ -772,7 +826,7 @@ class ZaloChannel extends EventEmitter {
                             } catch (err) {
                                 logger.warn(`⚠️ [${zaloId}] Lỗi phân trang requestOldMessages: ${err.message}`);
                             }
-                        }, 450);
+                        }, 350);
                     }
                 }
             } catch (e) {
@@ -829,9 +883,13 @@ class ZaloChannel extends EventEmitter {
                     senderName = message.data?.dName || '';
                 }
 
-                // Đảm bảo thread tồn tại (tên best-effort cho DM đến)
+                // Đảm bảo thread tồn tại (tên best-effort cho DM đến) và làm giàu avatar/tên nếu thiếu
                 const threadName = (threadType === 'user' && direction === 'in') ? senderName : '';
                 store.threads.ensureExists(threadId, threadType, threadName);
+                this._enrichMissingProfiles(
+                    threadType === 'user' ? [threadId] : [],
+                    threadType === 'group' ? [threadId] : []
+                ).catch(() => {});
 
                 // meta cho Trợ lý AI: mentions (nhóm), quote (reply), msgType
                 const meta = {};
@@ -865,17 +923,29 @@ class ZaloChannel extends EventEmitter {
             logger.error(`🔴 [${zaloId}] Listener WebSocket error: ${errMsg}`);
         });
 
-        // WebSocket đóng → check thật trước khi kết luận mất kết nối
+        // WebSocket đóng → check thật trước khi kết luận mất kết nối; nếu session vẫn sống thì tự động kết nối lại WebSocket
         this.api.listener.on('close', async () => {
             logger.warn(`🔌 [${zaloId}] Listener WebSocket CLOSED`);
             this.isListening = false;
             const connCheck = await this.checkConnectionAlive();
             if (!connCheck.alive) {
                 this._handleDisconnected(connCheck.error || 'WebSocket closed');
+            } else if (this.isLoggedIn && this.api?.listener) {
+                setTimeout(() => {
+                    if (this.isLoggedIn && !this.isListening && this.api?.listener) {
+                        try {
+                            logger.info(`🔄 [${zaloId}] Tự động kết nối lại WebSocket listener...`);
+                            this.api.listener.start({ retryOnClose: true });
+                            this.isListening = true;
+                        } catch (reErr) {
+                            logger.warn(`⚠️ [${zaloId}] Lỗi tự động kết nối lại listener: ${reErr.message}`);
+                        }
+                    }
+                }, 3000);
             }
         });
 
-        this.api.listener.start();
+        this.api.listener.start({ retryOnClose: true });
         this.isListening = true;
         logger.info(`👂 [${zaloId}] Message listener đã khởi động`);
     }

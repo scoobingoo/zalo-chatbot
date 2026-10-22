@@ -1,5 +1,5 @@
 // =============================================
-// ZaloFlow Studio — Logic điều khiển trang Inbox & CRM chính
+// ZaloFlow Studio — Logic điều khiển trang Livechat & CRM chuẩn Smax.ai
 // =============================================
 (() => {
 'use strict';
@@ -77,32 +77,80 @@ function timeShort(ts) {
 }
 
 function timeFull(ts) {
+    if (!ts) return '';
     const d = new Date(Number(ts));
-    return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    const timeStr = d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return timeStr;
+    return `${timeStr} ${d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`;
 }
 
-function avatarHtml(t, extraId = '') {
-    const idAttr = extraId ? ` id="${extraId}"` : '';
-    if (t.avatar_url) {
-        return `<img class="avatar"${idAttr} src="${esc(t.avatar_url)}" onerror="this.outerHTML='<div class=avatar${idAttr}>${t.type === 'group' ? '👥' : '👤'}</div>'">`;
+// Khởi tạo chữ cái viết tắt của tên khách hàng
+function getInitials(name, type) {
+    const clean = String(name || '').trim();
+    if (!clean || clean.startsWith('(')) return type === 'group' ? '👥' : '👤';
+    const parts = clean.split(/\s+/);
+    if (parts.length >= 2) {
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
     }
-    return `<div class="avatar"${idAttr}>${t.type === 'group' ? '👥' : '👤'}</div>`;
+    return clean.slice(0, 2).toUpperCase();
+}
+
+// Tạo HTML avatar an toàn (không lồng nháy kép trong onerror để tránh lỗi vỡ thuộc tính HTML)
+function avatarHtml(t, withZaloBadge = false) {
+    const fallbackText = esc(getInitials(t?.name, t?.type));
+    const badge = withZaloBadge ? `<span class="avatar-zalo-badge" title="Zalo">Z</span>` : '';
+    if (t && t.avatar_url) {
+        return `<div class="avatar-box"><img class="avatar" src="${esc(t.avatar_url)}" alt="" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex'"><div class="avatar" style="display:none">${fallbackText}</div>${badge}</div>`;
+    }
+    return `<div class="avatar-box"><div class="avatar">${fallbackText}</div>${badge}</div>`;
+}
+
+// Tạo mini avatar cạnh bong bóng tin nhắn
+function miniAvatarHtml(m) {
+    if (m.direction === 'out') {
+        const selfAva = zaloStatus?.avatar_url;
+        const selfName = zaloStatus?.display_name || 'Tôi';
+        const init = esc(getInitials(selfName, 'user'));
+        if (selfAva) {
+            return `<img class="msg-mini-avatar" src="${esc(selfAva)}" alt="" onerror="this.style.display='none'">`;
+        }
+        return `<div class="msg-mini-avatar" title="${esc(selfName)}">${init}</div>`;
+    }
+    const senderAva = currentThread?.avatar_url;
+    const senderName = m.sender_name || currentThread?.name || 'KH';
+    const init = esc(getInitials(senderName, currentThread?.type));
+    if (senderAva && currentThread?.type !== 'group') {
+        return `<img class="msg-mini-avatar" src="${esc(senderAva)}" alt="" onerror="this.style.display='none'">`;
+    }
+    return `<div class="msg-mini-avatar" title="${esc(senderName)}">${init}</div>`;
 }
 
 // ============ Hiển thị Trạng thái Kênh & Thống kê ============
 function renderChannelStatus() {
     const z = zaloStatus || {};
     const chip = $('channelChip');
-    if (z.zalo_id || z.display_name) {
-        chip.style.display = 'flex';
-        $('channelName').textContent = z.display_name || z.zalo_id;
-        $('channelAvatar').src = z.avatar_url || '';
-        $('channelAvatar').style.display = z.avatar_url ? 'block' : 'none';
-    } else {
-        chip.style.display = 'none';
+    if (chip) {
+        if (z.zalo_id || z.display_name) {
+            chip.style.display = 'flex';
+            if ($('channelName')) $('channelName').textContent = z.display_name || z.zalo_id;
+            if ($('channelAvatar')) {
+                $('channelAvatar').src = z.avatar_url || '';
+                $('channelAvatar').style.display = z.avatar_url ? 'block' : 'none';
+            }
+        } else {
+            chip.style.display = 'none';
+        }
     }
-    $('statusDot').className = 'status-dot' + (z.connected ? ' on' : '');
-    $('bannerDisconnected').style.display = z.connected ? 'none' : 'flex';
+    if ($('crmChannelName')) {
+        $('crmChannelName').textContent = z.display_name || z.zalo_id || 'Chưa kết nối';
+    }
+    if ($('crmChannelAvatar')) {
+        $('crmChannelAvatar').src = z.avatar_url || '';
+        $('crmChannelAvatar').style.display = z.avatar_url ? 'block' : 'none';
+    }
+    if ($('statusDot')) $('statusDot').className = 'status-dot' + (z.connected ? ' on' : '');
+    if ($('bannerDisconnected')) $('bannerDisconnected').style.display = z.connected ? 'none' : 'flex';
 }
 
 async function loadWorkspaceStats() {
@@ -118,7 +166,7 @@ async function loadWorkspaceStats() {
 
 // ============ Danh sách Hội thoại ============
 async function loadThreads() {
-    const search = $('searchInput').value.trim();
+    const search = $('searchInput') ? $('searchInput').value.trim() : '';
     const qs = new URLSearchParams({
         search,
         type: filterType,
@@ -160,29 +208,36 @@ function renderThreadTagPills(tagsStr) {
 
 function renderThreads() {
     const list = $('threadList');
+    if (!list) return;
     if (threads.length === 0) {
-        list.innerHTML = '<div class="empty-note">Không tìm thấy hội thoại phù hợp.<br>Bấm "📇 Đồng bộ" trên thanh công cụ để tải danh bạ &amp; nhóm từ Zalo.</div>';
+        list.innerHTML = '<div class="empty-note">Không tìm thấy hội thoại phù hợp.<br>Bấm nút 🔄 trên thanh tìm kiếm để đồng bộ danh bạ &amp; lịch sử từ Zalo.</div>';
         return;
     }
-    list.innerHTML = threads.map(t => `
+    list.innerHTML = threads.map(t => {
+        const displayName = t.name || (t.type === 'group' ? `Nhóm ${t.thread_id.slice(-4)}` : `Khách ${t.thread_id.slice(-4)}`);
+        const previewText = t.last_message || (t.notes ? '📝 ' + t.notes : 'Chưa có tin nhắn');
+        const outArrow = t.last_direction === 'out' ? '<span class="out-arrow">↩</span>' : '';
+        return `
         <div class="thread-item ${currentThread?.thread_id === t.thread_id ? 'active' : ''}" data-id="${esc(t.thread_id)}">
-            ${avatarHtml(t)}
+            ${avatarHtml(t, true)}
             <div class="thread-info">
                 <div class="thread-name">
-                    <span class="name-text">${esc(t.name || '(Chưa có tên)')}</span>
-                    <span class="badge-type ${t.type}">${t.type === 'group' ? 'NHÓM' : 'CÁ NHÂN'}</span>
+                    <span class="name-text">${esc(displayName)}</span>
+                    ${t.type === 'group' ? '<span class="badge-type group">NHÓM</span>' : ''}
                     ${renderThreadTagPills(t.tags)}
-                    ${aiIconFor(t)}
                 </div>
-                <div class="thread-id">${esc(t.thread_id)}${t.phone ? ' · 📞 ' + esc(t.phone) : ''}</div>
-                <div class="thread-preview">${t.last_direction === 'out' ? 'Bạn: ' : ''}${esc(t.last_message || (t.notes ? '📝 ' + t.notes : 'Chưa có tin nhắn'))}</div>
+                <div class="thread-preview">${outArrow}<span>${esc(previewText)}</span></div>
             </div>
             <div class="thread-meta">
                 <div class="thread-time">${timeShort(t.last_message_at)}</div>
-                ${t.unread_count > 0 ? `<span class="unread-badge">${t.unread_count}</span>` : ''}
+                <div class="thread-icons">
+                    ${t.phone ? `<span class="phone-ind" title="SĐT: ${esc(t.phone)}">📞</span>` : ''}
+                    ${aiIconFor(t)}
+                    ${t.unread_count > 0 ? `<span class="unread-badge">${t.unread_count}</span>` : ''}
+                </div>
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 
     list.querySelectorAll('.thread-item').forEach(el => {
         el.addEventListener('click', () => openThread(el.dataset.id));
@@ -194,7 +249,7 @@ async function openThread(threadId) {
     const json = await api(`/app/messages/${encodeURIComponent(threadId)}`);
     if (!json.success) return;
 
-    currentThread = json.data.thread || { thread_id: threadId, type: 'user', name: '', tags: '', notes: '' };
+    currentThread = json.data.thread || { thread_id: threadId, type: 'user', name: '', phone: '', tags: '', notes: '' };
     const msgs = json.data.messages;
     oldestMsgId = msgs.length > 0 ? msgs[0].id : 0;
 
@@ -202,14 +257,20 @@ async function openThread(threadId) {
     $('chatContent').style.display = 'flex';
     $('app').classList.add('chat-open');
 
-    $('chatTitle').textContent = currentThread.name || '(Chưa có tên)';
+    const displayName = currentThread.name || (currentThread.type === 'group' ? `Nhóm ${currentThread.thread_id}` : `Khách ${currentThread.thread_id}`);
+    $('chatTitle').textContent = displayName;
     $('chatThreadId').textContent = currentThread.thread_id;
     const badge = $('chatTypeBadge');
-    badge.textContent = currentThread.type === 'group' ? 'NHÓM' : 'CÁ NHÂN';
-    badge.className = 'badge-type ' + currentThread.type;
-    $('chatAvatar').outerHTML = avatarHtml(currentThread, 'chatAvatar');
+    if (badge) {
+        badge.textContent = currentThread.type === 'group' ? 'NHÓM' : 'ZALO';
+        badge.className = 'badge-type ' + currentThread.type;
+    }
+    if ($('chatAvatarWrap')) {
+        $('chatAvatarWrap').innerHTML = avatarHtml(currentThread, false);
+    }
     loadAiChip(threadId);
     fillCrmPanel(currentThread);
+    renderComposerTags();
 
     const body = $('chatBody');
     body.innerHTML = (msgs.length >= 50 ? '<div class="load-more"><button class="btn btn-light btn-sm" id="btnLoadMore">Tải tin nhắn cũ hơn</button></div>' : '')
@@ -221,16 +282,53 @@ async function openThread(threadId) {
     api(`/app/threads/${encodeURIComponent(threadId)}/read`, { method: 'POST' }).then(loadThreads);
 }
 
-// Điền dữ liệu vào cột CRM bên phải
+// Điền dữ liệu vào cột CRM chuẩn Smax.ai bên phải
 function fillCrmPanel(thread) {
     if (!$('crmPanel')) return;
     $('crmPanel').classList.remove('hidden');
-    $('crmAvatar').outerHTML = avatarHtml(thread, 'crmAvatar');
-    $('crmName').textContent = thread.name || '(Chưa có tên)';
-    $('crmMetaId').textContent = `ID: ${thread.thread_id}${thread.phone ? ' · SĐT: ' + thread.phone : ''}`;
-    $('crmTagsInput').value = thread.tags || '';
-    $('crmNotesInput').value = thread.notes || '';
+    if ($('crmAvatarWrap')) {
+        $('crmAvatarWrap').innerHTML = avatarHtml(thread, false);
+    }
+    const displayName = thread.name || '(Chưa cập nhật tên)';
+    if ($('crmName')) $('crmName').textContent = displayName;
+    if ($('crmMetaId')) $('crmMetaId').textContent = `UID: ${thread.thread_id}`;
+    if ($('crmNameInput')) $('crmNameInput').value = thread.name || '';
+    if ($('crmPhoneInput')) $('crmPhoneInput').value = thread.phone || '';
+    if ($('crmTagsInput')) $('crmTagsInput').value = thread.tags || '';
+    if ($('crmNotesInput')) $('crmNotesInput').value = thread.notes || '';
     syncCrmPresetButtons();
+}
+
+// Hiển thị danh sách thẻ Tag ngay phía trên ô nhập tin nhắn (chuẩn Smax.ai)
+function renderComposerTags() {
+    const wrap = $('composerTagsList');
+    if (!wrap || !currentThread) return;
+    const tags = (currentThread.tags || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+    wrap.innerHTML = tags.map(tag => `
+        <span class="composer-tag-pill">
+            <span>${esc(tag)}</span>
+            <button type="button" data-rm-tag="${esc(tag)}" title="Gỡ thẻ">✕</button>
+        </span>
+    `).join('');
+    wrap.querySelectorAll('button[data-rm-tag]').forEach(btn => {
+        btn.addEventListener('click', () => toggleTagAndSave(btn.dataset.rmTag));
+    });
+}
+
+async function toggleTagAndSave(tag) {
+    if (!currentThread) return;
+    const current = ($('crmTagsInput')?.value || currentThread.tags || '')
+        .split(',')
+        .map(x => x.trim())
+        .filter(Boolean);
+    const idx = current.findIndex(x => x.toLowerCase() === tag.toLowerCase());
+    if (idx >= 0) current.splice(idx, 1);
+    else current.push(tag);
+    if ($('crmTagsInput')) $('crmTagsInput').value = current.join(', ');
+    await saveCurrentCrm();
 }
 
 function syncCrmPresetButtons() {
@@ -247,16 +345,21 @@ function syncCrmPresetButtons() {
 
 async function saveCurrentCrm() {
     if (!currentThread) return;
-    const tags = $('crmTagsInput').value.trim();
-    const notes = $('crmNotesInput').value.trim();
+    const name = $('crmNameInput') ? $('crmNameInput').value.trim() : currentThread.name;
+    const phone = $('crmPhoneInput') ? $('crmPhoneInput').value.trim() : currentThread.phone;
+    const tags = $('crmTagsInput') ? $('crmTagsInput').value.trim() : '';
+    const notes = $('crmNotesInput') ? $('crmNotesInput').value.trim() : '';
     const json = await api(`/app/threads/${encodeURIComponent(currentThread.thread_id)}/crm`, {
         method: 'PATCH',
-        body: JSON.stringify({ tags, notes }),
+        body: JSON.stringify({ name, phone, tags, notes }),
     });
     if (json.success) {
         currentThread = json.data.thread;
+        if ($('chatTitle')) $('chatTitle').textContent = currentThread.name || currentThread.thread_id;
+        if ($('crmName')) $('crmName').textContent = currentThread.name || '(Chưa cập nhật tên)';
         syncCrmPresetButtons();
-        toast('💾 Đã lưu hồ sơ CRM cho khách hàng');
+        renderComposerTags();
+        toast('💾 Đã lưu hồ sơ khách hàng');
         loadThreads();
     } else {
         toast('❌ ' + (json.error?.message || 'Lỗi lưu CRM'));
@@ -315,11 +418,11 @@ async function loadOlderMessages() {
     body.scrollTop = body.scrollHeight - prevHeight;
 }
 
-// ============ Hiển thị 1 Tin nhắn ============
+// ============ Hiển thị 1 Tin nhắn chuẩn Smax.ai (Nhỏ gọn, không thừa khoảng trắng) ============
 function renderMessage(m) {
     let inner = '';
     if (m.content_type === 'text') {
-        inner = esc(m.content);
+        inner = `<div class="msg-text">${esc(m.content)}</div>`;
     } else if (m.content_type === 'photo' || m.content_type === 'webchat') {
         let obj = {};
         try { obj = JSON.parse(m.content); } catch { /* giữ obj rỗng */ }
@@ -327,7 +430,7 @@ function renderMessage(m) {
         const caption = obj.caption || obj.title || '';
         if (src) {
             inner = `<img class="msg-img" src="${esc(src)}" loading="lazy" onclick="window.open('${esc(src)}')">`
-                + (caption ? `<div>${esc(caption)}</div>` : '');
+                + (caption ? `<div class="msg-text">${esc(caption)}</div>` : '');
         } else {
             inner = `<span class="msg-special">[Hình ảnh]</span>`;
         }
@@ -345,14 +448,10 @@ function renderMessage(m) {
     const senderLine = (m.direction === 'in' && currentThread?.type === 'group' && m.sender_name)
         ? `<div class="msg-sender">${esc(m.sender_name)}</div>` : '';
 
-    return `
-        <div class="msg-row ${m.direction}" data-mid="${m.id}">
-            <div class="msg-bubble">
-                ${senderLine}
-                ${inner}
-                <div class="msg-time">${timeFull(m.sent_at)}${sourceLabel(m)}</div>
-            </div>
-        </div>`;
+    return `<div class="msg-row ${m.direction}" data-mid="${m.id}">`
+        + `<div class="msg-meta-top">${timeFull(m.sent_at)}${sourceLabel(m)}</div>`
+        + `<div class="msg-line">${miniAvatarHtml(m)}<div class="msg-bubble">${senderLine}${inner}</div></div>`
+        + `</div>`;
 }
 
 function sourceLabel(m) {
@@ -360,20 +459,22 @@ function sourceLabel(m) {
     if (m.source === 'ai') return ' · <span class="src-ai">🤖 AI</span>';
     if (m.source === 'api') return ' · API';
     if (m.source === 'mcp') return ' · MCP';
-    if (m.source === 'app') return ' · App';
+    if (m.source === 'app') return ' · Zalo App';
+    if (m.source === 'web') return ` · ${esc(me?.username || 'Web')}`;
     return '';
 }
 
 // ============ Trợ lý AI — Chip trạng thái trong Header Chat ============
-const AI_CHIP_LABEL = { on: 'AI: Đang bật', off: 'AI: Tắt', paused: 'AI: Tạm dừng', needs_human: 'AI: Cần người' };
+const AI_CHIP_LABEL = { on: 'AI: Bật', off: 'AI: Tắt', paused: 'AI: Tạm dừng', needs_human: 'AI: Cần người' };
 function renderAiChip() {
     const chip = $('aiChip');
+    if (!chip) return;
     if (!currentThread || !aiThreadState) { chip.style.display = 'none'; return; }
     const st = aiThreadState;
     chip.style.display = 'inline-flex';
     chip.className = 'ai-chip ' + st.effective;
     let label = AI_CHIP_LABEL[st.effective] || 'AI';
-    if (st.effective === 'paused' && st.paused_remaining_s > 0) label += ` (${Math.ceil(st.paused_remaining_s / 60)} phút)`;
+    if (st.effective === 'paused' && st.paused_remaining_s > 0) label += ` (${Math.ceil(st.paused_remaining_s / 60)}p)`;
     $('aiChipLabel').textContent = label;
     const reasons = {
         master_off: 'Công tắc tổng đang tắt (trang AI Studio).', thread_off: 'Đã tắt riêng cho hội thoại này.',
@@ -458,6 +559,19 @@ function clearImagePreview() {
     $('fileInput').value = '';
 }
 
+// ============ Đồng bộ Danh bạ & Lịch sử Tin nhắn ============
+async function triggerSyncZalo() {
+    toast('🔄 Đang đồng bộ danh bạ, hồ sơ & lịch sử tin nhắn từ Zalo...');
+    const json = await api('/app/zalo/sync', { method: 'POST' });
+    if (json.success) {
+        toast(`✅ Đã đồng bộ ${json.data.friends} bạn bè, ${json.data.groups} nhóm — đang tải tin nhắn cũ...`);
+        loadThreads();
+        loadWorkspaceStats();
+    } else {
+        toast('❌ ' + (json.error?.message || 'Lỗi đồng bộ'));
+    }
+}
+
 // ============ Kết nối QR Zalo ============
 async function openQrModal() {
     $('qrModal').style.display = 'flex';
@@ -485,7 +599,7 @@ async function openQrModal() {
                 return;
             }
             const s = st.data.status;
-            const labels = { waiting: 'Chờ quét mã...', scanned: '✅ Đã quét — vui lòng xác nhận trên điện thoại', success: '🎉 Kết nối thành công!' };
+            const labels = { waiting: 'Chờ quét mã...', scanned: '✅ Đã quét — vui lòng tích "Đồng bộ tin nhắn" và xác nhận trên ĐT', success: '🎉 Kết nối thành công!' };
             $('qrStatus').textContent = labels[s] || s;
             if (s === 'success') {
                 clearInterval(qrPollTimer);
@@ -520,13 +634,19 @@ function connectSSE() {
     });
     es.addEventListener('threads_updated', () => {
         loadThreads();
-        loadStats();
+        if (currentThread) {
+            const updated = threads.find(t => t.thread_id === currentThread.thread_id);
+            if (updated && updated.name && updated.name !== currentThread.name) {
+                currentThread = { ...currentThread, ...updated };
+                if ($('chatTitle')) $('chatTitle').textContent = currentThread.name;
+                fillCrmPanel(currentThread);
+            }
+        }
     });
     es.addEventListener('history_synced', (e) => {
         try {
             const data = JSON.parse(e.data || '{}');
             loadThreads();
-            loadStats();
             if (currentThread) {
                 openThread(currentThread.thread_id);
             }
@@ -562,8 +682,10 @@ async function refreshStatus() {
     if (json.success) {
         me = json.data.user;
         zaloStatus = json.data.zalo;
-        $('brandName').textContent = json.data.app_name;
-        document.title = json.data.app_name + ' — Workspace';
+        if ($('brandName') && json.data.app_name) {
+            $('brandName').textContent = json.data.app_name;
+        }
+        document.title = (json.data.app_name || 'ZaloFlow Studio') + ' — Workspace';
         renderChannelStatus();
     }
 }
@@ -572,28 +694,26 @@ async function refreshStatus() {
 function bindEvents() {
     if ($('btnTheme')) $('btnTheme').addEventListener('click', toggleTheme);
 
-    $('btnLogout').addEventListener('click', async () => {
-        await api('/app/logout', { method: 'POST' });
-        location.href = '/login.html';
-    });
-    $('btnConnect').addEventListener('click', openQrModal);
-    $('btnCloseQr').addEventListener('click', closeQrModal);
-    $('btnSync').addEventListener('click', async () => {
-        toast('🔄 Đang đồng bộ danh bạ & lịch sử tin nhắn từ Zalo...');
-        const json = await api('/app/zalo/sync', { method: 'POST' });
-        if (json.success) {
-            toast(`✅ Đã đồng bộ ${json.data.friends} bạn bè, ${json.data.groups} nhóm — đang tải lịch sử tin nhắn...`);
-            loadThreads();
-            loadStats();
-        } else {
-            toast('❌ ' + (json.error?.message || 'Lỗi đồng bộ'));
-        }
-    });
+    if ($('btnLogout')) {
+        $('btnLogout').addEventListener('click', async () => {
+            await api('/app/logout', { method: 'POST' });
+            location.href = '/login.html';
+        });
+    }
+    if ($('btnConnect')) $('btnConnect').addEventListener('click', openQrModal);
+    if ($('btnRailQr')) $('btnRailQr').addEventListener('click', openQrModal);
+    if ($('btnReQr')) $('btnReQr').addEventListener('click', openQrModal);
+    if ($('btnCloseQr')) $('btnCloseQr').addEventListener('click', closeQrModal);
 
-    $('searchInput').addEventListener('input', () => {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(loadThreads, 260);
-    });
+    if ($('btnSync')) $('btnSync').addEventListener('click', triggerSyncZalo);
+    if ($('btnSyncChat')) $('btnSyncChat').addEventListener('click', triggerSyncZalo);
+
+    if ($('searchInput')) {
+        $('searchInput').addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(loadThreads, 240);
+        });
+    }
 
     document.querySelectorAll('.filter-tabs button').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -621,21 +741,20 @@ function bindEvents() {
         });
     }
 
-    // Chọn nhanh nhãn CRM
+    // Chọn nhanh nhãn CRM ở cột phải
     document.querySelectorAll('#crmTagPresets .crm-tag-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            const tag = btn.dataset.tag;
-            const current = ($('crmTagsInput').value || '')
-                .split(',')
-                .map(x => x.trim())
-                .filter(Boolean);
-            const idx = current.findIndex(x => x.toLowerCase() === tag.toLowerCase());
-            if (idx >= 0) current.splice(idx, 1);
-            else current.push(tag);
-            $('crmTagsInput').value = current.join(', ');
-            syncCrmPresetButtons();
+            toggleTagAndSave(btn.dataset.tag);
         });
     });
+
+    // Chọn nhanh nhãn CRM trên thanh composer chuẩn Smax.ai
+    document.querySelectorAll('#composerQuickTags .quick-tag-add').forEach(btn => {
+        btn.addEventListener('click', () => {
+            toggleTagAndSave(btn.dataset.tag);
+        });
+    });
+
     if ($('crmTagsInput')) $('crmTagsInput').addEventListener('input', syncCrmPresetButtons);
     if ($('btnSaveCrm')) $('btnSaveCrm').addEventListener('click', saveCurrentCrm);
 
@@ -667,84 +786,94 @@ function bindEvents() {
     }
 
     const msgInput = $('msgInput');
-    msgInput.addEventListener('keydown', (e) => {
-        // Mở rộng phím tắt /shortcut khi nhấn phím Space hoặc Tab
-        if ((e.key === ' ' || e.key === 'Tab') && msgInput.value.startsWith('/')) {
-            const code = msgInput.value.slice(1).trim().toLowerCase();
-            const found = quickReplies.find(q => q.shortcut === code);
-            if (found) {
-                e.preventDefault();
-                msgInput.value = found.content;
-                msgInput.dispatchEvent(new Event('input'));
-                return;
+    if (msgInput) {
+        msgInput.addEventListener('keydown', (e) => {
+            // Mở rộng phím tắt /shortcut khi nhấn phím Space hoặc Tab
+            if ((e.key === ' ' || e.key === 'Tab') && msgInput.value.startsWith('/')) {
+                const code = msgInput.value.slice(1).trim().toLowerCase();
+                const found = quickReplies.find(q => q.shortcut === code);
+                if (found) {
+                    e.preventDefault();
+                    msgInput.value = found.content;
+                    msgInput.dispatchEvent(new Event('input'));
+                    return;
+                }
             }
-        }
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendCurrent();
-        }
-    });
-    msgInput.addEventListener('input', () => {
-        msgInput.style.height = 'auto';
-        msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
-    });
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendCurrent();
+            }
+        });
+        msgInput.addEventListener('input', () => {
+            msgInput.style.height = 'auto';
+            msgInput.style.height = Math.min(msgInput.scrollHeight, 110) + 'px';
+        });
 
-    $('btnSend').addEventListener('click', sendCurrent);
-    $('btnAttach').addEventListener('click', () => $('fileInput').click());
-    $('fileInput').addEventListener('change', () => {
-        const file = $('fileInput').files[0];
-        if (!file) return;
-        if (file.size > 8 * 1024 * 1024) { toast('❌ Ảnh tối đa 8MB'); return; }
-        const reader = new FileReader();
-        reader.onload = () => {
-            pendingImageBase64 = reader.result;
-            $('imgPreviewEl').src = reader.result;
-            $('imgPreview').style.display = 'flex';
-        };
-        reader.readAsDataURL(file);
-    });
-    $('btnRemoveImg').addEventListener('click', clearImagePreview);
+        // Hỗ trợ dán ảnh trực tiếp từ Clipboard vào khung soạn thảo
+        msgInput.addEventListener('paste', (e) => {
+            const items = e.clipboardData?.items || [];
+            for (const item of items) {
+                if (item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        pendingImageBase64 = reader.result;
+                        $('imgPreviewEl').src = reader.result;
+                        $('imgPreview').style.display = 'flex';
+                    };
+                    reader.readAsDataURL(file);
+                    e.preventDefault();
+                    break;
+                }
+            }
+        });
+    }
 
-    $('btnCopyId').addEventListener('click', () => {
-        if (currentThread) {
-            navigator.clipboard.writeText(currentThread.thread_id);
-            toast('📋 Đã sao chép ID: ' + currentThread.thread_id);
-        }
-    });
-    $('btnBack').addEventListener('click', () => $('app').classList.remove('chat-open'));
+    if ($('btnSend')) $('btnSend').addEventListener('click', sendCurrent);
+    if ($('btnAttach')) $('btnAttach').addEventListener('click', () => $('fileInput').click());
+    if ($('fileInput')) {
+        $('fileInput').addEventListener('change', () => {
+            const file = $('fileInput').files[0];
+            if (!file) return;
+            if (file.size > 8 * 1024 * 1024) { toast('❌ Ảnh tối đa 8MB'); return; }
+            const reader = new FileReader();
+            reader.onload = () => {
+                pendingImageBase64 = reader.result;
+                $('imgPreviewEl').src = reader.result;
+                $('imgPreview').style.display = 'flex';
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+    if ($('btnRemoveImg')) $('btnRemoveImg').addEventListener('click', clearImagePreview);
+
+    if ($('btnCopyId')) {
+        $('btnCopyId').addEventListener('click', () => {
+            if (currentThread) {
+                navigator.clipboard.writeText(currentThread.thread_id);
+                toast('📋 Đã sao chép ID: ' + currentThread.thread_id);
+            }
+        });
+    }
+    if ($('btnBack')) $('btnBack').addEventListener('click', () => $('app').classList.remove('chat-open'));
 
     // Chip AI + Menu
-    $('aiChip').addEventListener('click', (e) => {
-        e.stopPropagation();
-        const menu = $('aiMenu');
-        const open = menu.style.display !== 'none';
-        menu.style.display = open ? 'none' : 'block';
-        if (!open) { menu.style.top = ($('aiChip').offsetTop + $('aiChip').offsetHeight + 4) + 'px'; menu.style.right = '12px'; }
-    });
-    $('aiMenu').querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', () => {
-        $('aiMenu').style.display = 'none';
-        aiChipAction(b.dataset.act);
-    }));
-    document.addEventListener('click', (e) => { if (!$('aiMenu').contains(e.target)) $('aiMenu').style.display = 'none'; });
-
-    // Hỗ trợ dán ảnh trực tiếp từ Clipboard vào khung soạn thảo
-    msgInput.addEventListener('paste', (e) => {
-        const items = e.clipboardData?.items || [];
-        for (const item of items) {
-            if (item.type.startsWith('image/')) {
-                const file = item.getAsFile();
-                const reader = new FileReader();
-                reader.onload = () => {
-                    pendingImageBase64 = reader.result;
-                    $('imgPreviewEl').src = reader.result;
-                    $('imgPreview').style.display = 'flex';
-                };
-                reader.readAsDataURL(file);
-                e.preventDefault();
-                break;
-            }
-        }
-    });
+    if ($('aiChip')) {
+        $('aiChip').addEventListener('click', (e) => {
+            e.stopPropagation();
+            const menu = $('aiMenu');
+            const open = menu.style.display !== 'none';
+            menu.style.display = open ? 'none' : 'block';
+            if (!open) { menu.style.top = ($('aiChip').offsetTop + $('aiChip').offsetHeight + 4) + 'px'; menu.style.right = '12px'; }
+        });
+    }
+    if ($('aiMenu')) {
+        $('aiMenu').querySelectorAll('button[data-act]').forEach(b => b.addEventListener('click', () => {
+            $('aiMenu').style.display = 'none';
+            aiChipAction(b.dataset.act);
+        }));
+        document.addEventListener('click', (e) => { if (!$('aiMenu').contains(e.target)) $('aiMenu').style.display = 'none'; });
+    }
 }
 
 // ============ Khởi chạy Ứng dụng ============
