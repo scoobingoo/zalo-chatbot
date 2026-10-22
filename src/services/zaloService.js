@@ -83,6 +83,8 @@ class ZaloChannel extends EventEmitter {
         this._sentMsgIds = new Set();
         // Cache RAM tập group-ID (TTL 5 phút)
         this._groupIdSetCache = { ids: null, at: 0 };
+        // Trạng thái phân trang khi đồng bộ lịch sử tin nhắn cũ qua WebSocket (giống Zalo PC)
+        this._oldMsgSyncState = {};
     }
 
     static get GROUP_SET_TTL() { return 5 * 60 * 1000; }
@@ -379,8 +381,196 @@ class ZaloChannel extends EventEmitter {
             logger.warn(`⚠️ [${this.zaloId}] Lỗi import nhóm: ${e.message}`);
         }
 
+        // 3. Yêu cầu đồng bộ lịch sử tin nhắn cũ từ WebSocket Zalo (giống Zalo PC)
+        this.syncOldMessages(6);
+
         this.emit('threads_updated', {});
-        return { friends: friendCount, groups: groupCount };
+        return { friends: friendCount, groups: groupCount, history_sync_requested: true };
+    }
+
+    // ==========================================
+    // Đồng bộ lịch sử tin nhắn cũ (giống Zalo PC)
+    // Sử dụng WebSocket cmd 510 (User) & 511 (Group) của zca-js
+    // ==========================================
+    syncOldMessages(maxPages = 6) {
+        if (!this.api?.listener || !this.isListening) {
+            return { requested: false, reason: 'Listener chưa hoạt động' };
+        }
+        this._oldMsgSyncState = {
+            [ThreadType.User]: { pages: 0, maxPages, lastActionId: null },
+            [ThreadType.Group]: { pages: 0, maxPages, lastActionId: null },
+        };
+        try {
+            this.api.listener.requestOldMessages(ThreadType.User, null);
+        } catch (e) {
+            logger.warn(`⚠️ [${this.zaloId}] Lỗi requestOldMessages(User): ${e.message}`);
+        }
+        try {
+            this.api.listener.requestOldMessages(ThreadType.Group, null);
+        } catch (e) {
+            logger.warn(`⚠️ [${this.zaloId}] Lỗi requestOldMessages(Group): ${e.message}`);
+        }
+        logger.info(`🔄 [${this.zaloId}] Đã gửi yêu cầu đồng bộ lịch sử tin nhắn Zalo qua WebSocket...`);
+        return { requested: true, maxPages };
+    }
+
+    // Hàm dùng chung để chuẩn hóa, chống trùng và lưu danh sách tin nhắn lịch sử vào SQLite
+    async _ingestHistoryMessages(messages, resolvedType) {
+        if (!Array.isArray(messages) || messages.length === 0) return 0;
+        const zaloId = this.zaloId;
+        let importedCount = 0;
+        const discoveredUsers = [];
+        const discoveredGroups = [];
+
+        // Sắp xếp theo thời gian tăng dần để lưu theo đúng thứ tự lịch sử
+        const sorted = [...messages].sort((a, b) => Number(a?.data?.ts || 0) - Number(b?.data?.ts || 0));
+
+        for (const message of sorted) {
+            // Bỏ qua sự kiện thu hồi/xóa tin nhắn trong lịch sử
+            if (typeof message.data?.content === 'object' && message.data?.content !== null && 'deleteMsg' in message.data.content) {
+                continue;
+            }
+            const msgId = String(message.data?.msgId || message.data?.actionId || message.data?.cliMsgId || '');
+            if (!msgId) continue;
+
+            // Dedupe: nếu tin nhắn đã có trong DB thì bỏ qua
+            if (store.messages.existsByMsgId(msgId)) continue;
+
+            const direction = message.isSelf ? 'out' : 'in';
+            const source = message.isSelf ? 'app' : 'zalo';
+            const threadId = String(message.threadId || '');
+            if (!threadId || threadId === '0') continue;
+
+            // Parse nội dung
+            const rawContent = message.data?.content;
+            let contentType = 'text';
+            let content = '';
+            if (typeof rawContent === 'string') {
+                content = rawContent;
+            } else if (rawContent && typeof rawContent === 'object') {
+                contentType = rawContent.type || (rawContent.href || rawContent.thumb ? 'photo' : 'unknown');
+                try { content = JSON.stringify(rawContent); } catch { content = String(rawContent); }
+            } else {
+                contentType = 'unknown';
+                content = '';
+            }
+
+            // Người gửi
+            let senderId, senderName;
+            if (direction === 'out') {
+                senderId = zaloId;
+                senderName = this.userInfo?.displayName || 'Tôi';
+            } else {
+                senderId = String(message.data?.uidFrom || threadId);
+                senderName = message.data?.dName || '';
+            }
+
+            // Đảm bảo thread tồn tại (nếu là DM đến từ người lạ thì lấy tạm dName)
+            const threadName = (resolvedType === 'user' && direction === 'in') ? senderName : '';
+            store.threads.ensureExists(threadId, resolvedType, threadName);
+
+            if (resolvedType === 'user') discoveredUsers.push(threadId);
+            else discoveredGroups.push(threadId);
+
+            // Meta (mentions, quote, msgType)
+            const meta = {};
+            if (Array.isArray(message.data?.mentions) && message.data.mentions.length) {
+                meta.mentions = message.data.mentions.map(m => ({ uid: String(m.uid), pos: m.pos, len: m.len, type: m.type }));
+            }
+            if (message.data?.quote) {
+                const q = message.data.quote;
+                meta.quote = { ownerId: String(q.ownerId || ''), globalMsgId: q.globalMsgId, cliMsgId: q.cliMsgId, msg: typeof q.msg === 'string' ? q.msg.slice(0, 500) : '' };
+            }
+            if (message.data?.msgType) meta.msgType = message.data.msgType;
+
+            // Lưu DB với incUnread = false và KHÔNG emit ai_incoming (tránh AI tự trả lời tin nhắn cũ)
+            this._storeMessage({
+                msgId, threadId, threadType: resolvedType, direction, source,
+                senderId, senderName, content, contentType,
+                sentAt: Number(message.data?.ts) || Date.now(),
+                meta: Object.keys(meta).length ? meta : null,
+                incUnread: false,
+                emitMessageEvent: false,
+            });
+            importedCount++;
+        }
+
+        // Làm giàu tên hiển thị & avatar cho các thread chưa có thông tin
+        if (discoveredUsers.length || discoveredGroups.length) {
+            this._enrichMissingProfiles(discoveredUsers, discoveredGroups).catch(() => {});
+        }
+
+        // Cập nhật UI realtime nếu có tin mới được đồng bộ
+        if (importedCount > 0) {
+            logger.info(`📥 [${zaloId}] Đồng bộ ${importedCount}/${messages.length} tin nhắn lịch sử (${resolvedType})`);
+            this.emit('threads_updated', {});
+            this.emit('history_synced', { type: resolvedType, imported: importedCount, total_batch: messages.length });
+        }
+        return importedCount;
+    }
+
+    // Bổ sung tên hiển thị + avatar cho các hội thoại người lạ / nhóm mới phát hiện từ lịch sử tin nhắn
+    async _enrichMissingProfiles(userIds = [], groupIds = []) {
+        if (!this.api || !this.isLoggedIn) return;
+        let updatedAny = false;
+
+        // 1. Lấy thông tin người dùng chưa có tên hoặc avatar
+        const missingUsers = [...new Set(userIds)].filter(uid => {
+            const t = store.threads.get(String(uid));
+            return !t || !t.name || !t.avatar_url;
+        });
+
+        const USER_BATCH = 20;
+        for (let i = 0; i < missingUsers.length; i += USER_BATCH) {
+            const batch = missingUsers.slice(i, i + USER_BATCH);
+            try {
+                const res = await this.api.getUserInfo(batch);
+                const changed = res?.changed_profiles || {};
+                for (const [rawKey, profile] of Object.entries(changed)) {
+                    if (!profile) continue;
+                    const uid = String(profile.userId || rawKey.split('_')[0]);
+                    const name = profile.displayName || profile.zaloName || profile.dName || '';
+                    const avatarUrl = profile.avatar || '';
+                    if (name || avatarUrl) {
+                        store.threads.updateProfileIfMissing({ threadId: uid, name, avatarUrl });
+                        updatedAny = true;
+                    }
+                }
+            } catch (e) {
+                logger.warn(`⚠️ [${this.zaloId}] Bổ sung profile user lỗi: ${e.message}`);
+            }
+        }
+
+        // 2. Lấy thông tin nhóm chưa có tên hoặc avatar (batch 10 theo quy tắc zca-js)
+        const missingGroups = [...new Set(groupIds)].filter(gid => {
+            const t = store.threads.get(String(gid));
+            return !t || !t.name || !t.avatar_url;
+        });
+
+        const GROUP_BATCH = 10;
+        for (let i = 0; i < missingGroups.length; i += GROUP_BATCH) {
+            const batch = missingGroups.slice(i, i + GROUP_BATCH);
+            try {
+                const res = await this.api.getGroupInfo(batch);
+                const gridInfoMap = res?.gridInfoMap || {};
+                for (const gid of batch) {
+                    const info = gridInfoMap[gid];
+                    if (!info) continue;
+                    const name = info.name || '';
+                    const avatarUrl = info.avt || '';
+                    if (name || avatarUrl) {
+                        store.threads.updateProfileIfMissing({ threadId: String(gid), name, avatarUrl });
+                        updatedAny = true;
+                    }
+                }
+            } catch (e) {
+                logger.warn(`⚠️ [${this.zaloId}] Bổ sung profile group lỗi: ${e.message}`);
+            }
+        }
+
+        if (updatedAny) {
+            this.emit('threads_updated', {});
+        }
     }
 
     // ==========================================
@@ -544,6 +734,52 @@ class ZaloChannel extends EventEmitter {
         if (!this.api || !this.isLoggedIn || this.isListening) return;
         const zaloId = this.zaloId;
 
+        // Khi WebSocket nhận được khóa giải mã (cipher_key), tự động yêu cầu đồng bộ lịch sử tin nhắn cũ giống Zalo PC
+        this.api.listener.on('cipher_key', () => {
+            logger.info(`🔐 [${zaloId}] WebSocket đã nhận cipher_key — bắt đầu đồng bộ lịch sử tin nhắn cũ...`);
+            setTimeout(() => {
+                if (this.isListening) this.syncOldMessages(6);
+            }, 500);
+        });
+
+        // Nhận lịch sử tin nhắn đồng bộ từ Zalo Server (cmd 510 User / cmd 511 Group)
+        this.api.listener.on('old_messages', async (messages, threadType) => {
+            try {
+                if (!Array.isArray(messages) || messages.length === 0) return;
+                const isGroup = threadType === ThreadType.Group;
+                const resolvedType = isGroup ? 'group' : 'user';
+                const importedCount = await this._ingestHistoryMessages(messages, resolvedType);
+
+                // Nếu trang đầu trả về đầy đủ (ví dụ >= 20 tin) và có actionId lớn nhất, thử lấy tiếp tin mới hơn nếu còn
+                const syncState = this._oldMsgSyncState?.[threadType];
+                if (syncState) {
+                    syncState.pages += 1;
+                    const newestMsg = messages[messages.length - 1];
+                    const newestActionId = newestMsg?.data?.actionId || newestMsg?.data?.msgId || null;
+                    if (
+                        importedCount > 0 &&
+                        messages.length >= 20 &&
+                        newestActionId &&
+                        newestActionId !== syncState.lastActionId &&
+                        syncState.pages < syncState.maxPages
+                    ) {
+                        syncState.lastActionId = newestActionId;
+                        setTimeout(() => {
+                            try {
+                                if (this.isListening && this.api?.listener) {
+                                    this.api.listener.requestOldMessages(threadType, newestActionId);
+                                }
+                            } catch (err) {
+                                logger.warn(`⚠️ [${zaloId}] Lỗi phân trang requestOldMessages: ${err.message}`);
+                            }
+                        }, 450);
+                    }
+                }
+            } catch (e) {
+                logger.error(`❌ [${zaloId}] Lỗi xử lý old_messages:`, e.message);
+            }
+        });
+
         this.api.listener.on('message', async (message) => {
             try {
                 const msgId = String(message.data?.msgId || '');
@@ -678,7 +914,7 @@ class ZaloChannel extends EventEmitter {
     }
 
     // Lưu message vào DB + cập nhật thread + emit event → SSE đẩy cho UI
-    _storeMessage({ msgId, threadId, threadType, direction, source, senderId, senderName, content, contentType, sentAt, meta = null }) {
+    _storeMessage({ msgId, threadId, threadType, direction, source, senderId, senderName, content, contentType, sentAt, meta = null, incUnread = null, emitMessageEvent = true }) {
         store.threads.ensureExists(threadId, threadType, '');
         const info = store.messages.insert({
             msgId, threadId, direction, source, senderId, senderName, content, contentType, sentAt, meta,
@@ -691,11 +927,14 @@ class ZaloChannel extends EventEmitter {
             preview = labels[contentType] || `[${contentType}]`;
         }
         if (preview.length > 120) preview = preview.slice(0, 120);
-        store.threads.updateLastMessage(threadId, preview, sentAt, direction, direction === 'in');
+        const shouldIncUnread = incUnread !== null ? incUnread : (direction === 'in');
+        store.threads.updateLastMessage(threadId, preview, sentAt, direction, shouldIncUnread);
 
         const row = store.messages.findById(info.lastInsertRowid);
         const thread = store.threads.get(threadId);
-        this.emit('message', { message: row, thread });
+        if (emitMessageEvent) {
+            this.emit('message', { message: row, thread });
+        }
         return row;
     }
 

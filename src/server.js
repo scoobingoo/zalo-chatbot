@@ -72,6 +72,7 @@ app.get('/health', (req, res) => {
 zaloChannel.on('message', (payload) => sse.broadcast('message', payload));
 zaloChannel.on('status', (payload) => sse.broadcast('status', payload));
 zaloChannel.on('threads_updated', () => sse.broadcast('threads_updated', {}));
+zaloChannel.on('history_synced', (payload) => sse.broadcast('history_synced', payload));
 
 // ==========================================
 // Trợ lý AI — nghe tin đến từ kênh, trả lời tự động; event → SSE cho UI
